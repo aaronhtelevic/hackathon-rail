@@ -49,9 +49,9 @@ WARM_KEYS = ("stationFrom", "coordFrom", "tFromEpochMillis")
 # derived from the others (coords from the station registry, station from the nearest to
 # the coords, t0 from the first sensor sample, ISO time strings).
 _ALIASES = {
-    "stationFrom": ("stationFrom", "startStation", "station_from", "fromStation", "originStation", "stationName"),
-    "coordFrom": ("coordFrom", "startCoord", "coord_from", "fromCoord", "startCoordinates", "coord"),
-    "tFromEpochMillis": ("tFromEpochMillis", "startEpochMillis", "t_from_epoch_millis", "tFrom", "epochMillisFrom", "startTimeMs"),
+    "stationFrom": ("stationFrom", "startStation", "station_from", "fromStation", "originStation", "stationName", "initialStationName"),
+    "coordFrom": ("coordFrom", "startCoord", "coord_from", "fromCoord", "startCoordinates", "coord", "initialCoord"),
+    "tFromEpochMillis": ("tFromEpochMillis", "startEpochMillis", "t_from_epoch_millis", "tFrom", "epochMillisFrom", "startTimeMs", "initialEpochMillis"),
 }
 _ISO_KEYS = ("tFromISO", "startISO", "tFrom", "startTime")
 _LABEL_KEYS = ("lineName", "stationTo", "coordTo", "routeLengthM", "tToEpochMillis", "direction")
@@ -72,11 +72,16 @@ def _lonlat(c) -> tuple[float, float] | None:
 
 
 def warm_from_meta(leg_id: str) -> WarmStart | None:
-    """Only the warm-track fields (station name, coordinates, start time) are read from meta.json.
-    None when the file is missing or nothing usable is in it (cold-only leg)."""
-    f = paths.leg_dir(leg_id) / "meta.json"
+    """Only the warm-track fields (station name, coordinates, start time) are read from meta.json,
+    falling back to meta_warm.json when meta.json doesn't exist (scoring-release leg layout —
+    meta.json is split into meta_warm.json/meta_cold.json per track there).
+    None when neither file exists or nothing usable is in it (cold-only leg)."""
+    d = paths.leg_dir(leg_id)
+    f = d / "meta.json"
     if not f.exists():
-        return None
+        f = d / "meta_warm.json"
+        if not f.exists():
+            return None
     m = json.loads(f.read_text(encoding="utf-8"))
     name = _pick(m, "stationFrom")
     ll = _lonlat(_pick(m, "coordFrom"))
