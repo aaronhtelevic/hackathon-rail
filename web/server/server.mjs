@@ -55,18 +55,11 @@ fs.mkdirSync(RUNS_DIR, { recursive: true })
 // shell is involved at any point.
 
 const LANES = {
-  motion: {
-    label: 'motion lane',
-    script: 'motion/shape_stream.py',
-    needsPandas: false, // stdlib only
-    // shape_stream.py takes --legs A B C, or --all
-    legArgs: (legs, all) => (all ? ['--all'] : ['--legs', ...legs]),
-  },
-  absolute: {
-    label: 'absolute warm solver',
-    script: 'scripts/run_warm_gui.py',
-    needsPandas: true,
-    // run_warm_gui.py defaults to every practice leg when --legs is omitted
+  joint: {
+    label: 'joint run',
+    script: 'scripts/run_joint.py',
+    needsPandas: true, // absolute-side deps; motion side is stdlib-only either way
+    // run_joint.py defaults to every practice leg when --legs is omitted
     legArgs: (legs, all) => (all ? [] : ['--legs', ...legs]),
   },
 }

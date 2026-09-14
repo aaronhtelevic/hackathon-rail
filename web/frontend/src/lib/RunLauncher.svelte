@@ -5,16 +5,15 @@
 
   let { jobs = [], onstarted = () => {} } = $props()
 
-  const LANES = [
-    { id: 'motion', label: 'motion', hint: 'shape_stream.py — IMU shape, stdlib only' },
-    { id: 'absolute', label: 'absolute', hint: 'run_warm_gui.py — GTFS + OSM warm solver, needs .venv' },
-  ]
+  // Motion and absolute always run together now — hydration needs both
+  // shape.json and anchors.json from the same leg, so there is no more
+  // standalone "motion run" or "absolute run" (see run_joint.py).
+  const lane = 'joint'
 
   let open = $state(false)
   let legs = $state([])
   let practiceDir = $state('')
   let loadError = $state(null)
-  let lane = $state('motion')
   let filter = $state('')
   let selected = $state(new Set())
   let notes = $state('')
@@ -97,14 +96,6 @@
   {#if open}
     {#if loadError}<p class="err">{loadError}</p>{/if}
 
-    <div class="row lanes">
-      {#each LANES as l (l.id)}
-        <button class="lane {l.id}" aria-pressed={lane === l.id} title={l.hint} onclick={() => (lane = l.id)}>
-          {l.label}
-        </button>
-      {/each}
-    </div>
-
     <div class="row">
       <input class="filter" placeholder="filter legs (e.g. ic830)" bind:value={filter} />
       <button onclick={toggleShown} disabled={!shown.length}>
@@ -131,7 +122,7 @@
     <div class="row actions">
       <span class="dim">{selected.size}/{legs.length} legs</span>
       <button class="go" disabled={busy || !selected.size || Boolean(laneRunning)} onclick={start}>
-        {laneRunning ? `${lane} lane busy` : busy ? 'starting…' : `run ${lane} lane`}
+        {laneRunning ? 'joint run busy' : busy ? 'starting…' : 'run joint'}
       </button>
     </div>
   {/if}
@@ -160,9 +151,6 @@
 
   .row { display: flex; gap: 6px; align-items: center; }
   .actions { justify-content: space-between; }
-  .lanes .lane { flex: 1; }
-  .lane.motion[aria-pressed="true"] { color: var(--motion); border-color: var(--motion); }
-  .lane.absolute[aria-pressed="true"] { color: var(--absolute); border-color: var(--absolute); }
 
   input {
     font: inherit; color: inherit; background: var(--panel-2);

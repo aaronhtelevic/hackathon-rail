@@ -56,28 +56,35 @@ npm start                # build + serve everything on http://localhost:5174
 
 ## Starting a run from the GUI
 
-The **New run** panel at the top of the sidebar starts a lane runner, so you
-don't need a second terminal:
+The **New run** panel at the top of the sidebar starts the joint runner
+(`scripts/run_joint.py`), so you don't need a second terminal:
 
-1. pick a lane — **motion** (`motion/shape_stream.py`) or **absolute**
-   (`scripts/run_warm_gui.py`),
-2. tick the practice legs to run on (filter box + *all/none*),
-3. optional notes (they show up in the run list),
-4. **run &lt;lane&gt; lane**.
+1. tick the practice legs to run on (filter box + *all/none*),
+2. optional notes (they show up in the run list),
+3. **run joint**.
 
-The view jumps to the new run and fills in as the runner writes. One run per
-lane at a time; **stop** sends `SIGTERM` (then `SIGKILL` after 5 s), and the
-server kills any child it still owns when it exits.
+Motion and absolute always run together, per leg, in that order — motion's
+`shape.json` is written before the absolute solver reads it (`motion_window`
+prefers the real `moving` segments over the schedule-dwell prior once it
+exists), and both write into the same leg entry so the viewer shows shape +
+anchors + hydrated + score together. There is no more standalone "motion
+run" or "absolute run"; `motion/shape_stream.py` and `scripts/run_warm_gui.py`
+still work stand-alone from a shell for lane-local debugging, but the GUI
+only launches the joint script.
+
+The view jumps to the new run and fills in as the runner writes. One run at
+a time; **stop** sends `SIGTERM` (then `SIGKILL` after 5 s), and the server
+kills any child it still owns when it exits.
 
 What the server will and won't do:
 
-- The two command lines are **fixed in `server.mjs`**. The only client-supplied
+- The command line is **fixed in `server.mjs`**. The only client-supplied
   input is the leg list, and each name must match a directory under
   `datasets/practice` (with a `sensors.db`) before it becomes an argv item.
   Nothing goes through a shell.
-- The absolute lane needs `pandas`, so it only runs when `.venv/bin/python`
-  exists at the repo root; otherwise the panel says so instead of failing
-  halfway.
+- The joint run needs `pandas` (absolute side), so it only runs when
+  `.venv/bin/python` exists at the repo root; otherwise the panel says so
+  instead of failing halfway.
 - Because the server can now run local processes, it binds **127.0.0.1** by
   default. `RAIL_GUI_HOST=0.0.0.0` opens it up — only do that on a trusted
   network, or set `RAIL_GUI_LAUNCH=0` to turn the launcher off entirely.
@@ -94,7 +101,7 @@ it; there is no registration step, no socket, no database.
 
 ```
 work/runs/
-└── 20260914-1503-motion/            # <run_id> — one directory per invocation
+└── 20260914-1503-joint/             # <run_id> — one directory per invocation
     ├── run.json                     # who ran, what, when
     ├── ic830_00/                    # <leg_id> — one directory per leg
     │   ├── status.json              # current state of this leg (overwritten)
@@ -119,9 +126,9 @@ in the sidebar immediately, even before it contains a single file.
 
 ```jsonc
 {
-  "run_id": "20260914-1503-motion",
-  "algorithm": "motion-lane",        // free text, shown in the run list
-  "lane": "motion",                  // "motion" | "absolute" | "joint"
+  "run_id": "20260914-1503-joint",
+  "algorithm": "joint",              // free text, shown in the run list
+  "lane": "joint",                   // "joint" is the only lane the GUI launches now
   "track": "warm",                   // "warm" | "cold" | null
   "state": "running",                // "running" | "done" | "error"
   "started_at": 1757830000000,       // epochMillis
@@ -279,7 +286,7 @@ web/
 │       ├── App.svelte            # run list, leg list, detail panes
 │       └── lib/
 │           ├── api.js            # fetch + SSE client
-│           ├── RunLauncher.svelte   # lane + leg picker, start/stop, job log
+│           ├── RunLauncher.svelte   # leg picker, start/stop, job log
 │           ├── LaneTimeline.svelte   # shape segments + anchors, shared time axis
 │           ├── AnchorMap.svelte      # anchor candidates + hydrated polyline
 │           ├── EventLog.svelte       # events.ndjson tail

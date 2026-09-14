@@ -43,9 +43,19 @@ in OSM (N1).
 solid (net heading error median 10 deg); the length prior is weak (median 39 %)
 — see `WORKLOG.md` → Motion lane. Task detail in the M/O/H2 rows.
 
-**The two do not talk to each other yet.** Phase 3 (hydration, §5) is the next
-real work: it is what turns the shape into scale-correct position and what
-lets cell anchors re-rank the GTFS shortlist. Hydration (H3–H7) not started.
+**The two lanes now run jointly, not separately** (`scripts/run_joint.py`,
+2026-09-14): per leg, motion writes `shape.json` first, then the absolute
+solver runs and reads it (`motion_window` already preferred real `moving`
+segments over the schedule-dwell prior when present — now it always gets
+the chance to). A standalone motion-only or absolute-only run no longer
+makes sense, because both files feed the one hydration step that snaps to
+OSM; `motion/shape_stream.py` and `scripts/run_warm_gui.py` still run
+stand-alone from a shell for lane-local debugging, but the web GUI's "New
+run" panel only launches the joint script now. Phase 3 (hydration, §5) is
+the next real work: it is what turns the shape into scale-correct position
+and what lets cell anchors re-rank the GTFS shortlist. Hydration (H3–H7) not
+started — the joint runner produces both contract files together, it does
+not yet join them.
 
 **Decision taken (A):** we submit **`latitude,longitude`**, not
 `distanceAlongTrackM`. The scorer projects onto its own polyline, so we never
@@ -190,7 +200,8 @@ Consequences worth internalizing:
 | I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | DONE | `absolute/track.py`. 250k nodes / 257k edges; stitching at ≤8 m collapses 203 → **48** components, largest 249k nodes. 23/50 legs within 2 % of true length; the rest → N1. |
 | I3 | Wrapper around `scorer/scorer.py` — import `score_leg()` directly, don't shell out per leg | A | DONE | `absolute/harness.py` — imports `scorer.score_leg`, flattens to one row per leg, prints a summary. |
 | I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | A | DONE | `absolute/submission.py`. We emit **lat/lon**, not `distanceAlongTrackM` — see §0 / decision log. |
-| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | DONE | `scripts/run_warm.py` solves + scores all 50 legs in ~2 min; table saved to `work/warm_scores.csv`. |
+| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | DONE | `scripts/run_warm.py` (absolute-only) and `scripts/run_joint.py` (motion+absolute, now the default) solve + score all 50 legs in a couple minutes; table saved to `work/warm_scores.csv`. |
+| I8 | Merge the two lane runners into one joint run per leg | J | DONE | `scripts/run_joint.py`: motion's `run_leg()` writes `shape.json`, then `solve.solve_warm()` reads it and writes `anchors.json` + submission — same `RunWriter` leg entry (`lane="joint"`), so the GUI shows shape+anchors+hydrated+score together. Wired into `web/`'s "New run" panel (`LANES` in `server.mjs` is now one entry). Order is load-bearing: motion must finish before `motion_window()` reads `shape.json`. |
 | I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | A | DONE | `absolute/stations.py`: **UIC join** — GTFS `stop_id` `gs:nmbssncb:8896008` ↔ OSM `uic_ref`. 672/835 stations keyed. Name fallback = scorer normalisation + order-free token prefixes (`aspere gavere` → `Gavere-Asper`). 39/39 leg station names resolve. |
 
 ## 4. Phase 2 — Motion shape from IMU (`WORKLOG.md` step 2)
@@ -315,6 +326,7 @@ Motion lane's endgame work.
 | 2026-09-14 | Absolute lane = engineer B | Lane owners: motion = A, absolute = B. |
 | | Lane owners: motion = **TBD**, absolute = **TBD** | Two engineers, two lanes (§0). Put real names here so `Own` column is unambiguous. |
 | 2026-09-14 | Cut the pipeline at `shape.json` + `anchors.json` | Only clean seam between the two lanes; lets each side work against a stub of the other. Contracts in `WORKLOG.md`. |
+| 2026-09-14 | Merge the two lane runners: one joint run produces both files per leg (**I8**) | Both are needed for hydration + the OSM snap; a standalone motion-only or absolute-only run has no use once the contracts are real. `scripts/run_joint.py` is now the default entry point, and the web GUI only launches it. |
 
 Resolved by `scorer/` (2026-09-14):
 - ~~Where is the scorer?~~ → `scorer/`, the organizers' own code.
