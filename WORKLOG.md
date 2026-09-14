@@ -21,6 +21,17 @@ rail network/stations).
   meaning/context.
 - Wrote `DATA_SCHEMA.md` — structure-only reference for sensors.db, meta.json,
   ground_truth.csv, submission format, and all reference_data sources.
+- Surveyed sensor coverage across all 50 practice legs (see `TASKS.md` §12).
+  Non-obvious results:
+  - **24 of 50 legs have zero `cell_samples`** — `datasets/README.md` calls
+    this "a handful". It is ride-correlated, not random: all legs of ic2809,
+    ic2933, ic3013, ic830, l1679, s51_785 are empty; all legs of ic2035,
+    ic2315, ic3033, ic4112, ic536, s51_761 have cell data.
+  - WiFi is thin — 13–1,074 rows/leg, 1–174 distinct BSSIDs.
+  - Accel and gyro are both ~493 Hz with identical row counts per leg
+    (synchronised sampling); ~900k rows/sensor on a 30-min leg.
+  - Ground truth: 44 `good`, 2 `degraded` (ic2035), 4 `bad` (all ic536).
+    The ic536 legs have the richest cell data but unusable ground truth.
 
 ## Constraints
 
@@ -33,12 +44,18 @@ rail network/stations).
 Current plan, subject to revision as pieces get built/tested:
 
 1. **Per-signal location estimate** — for each location-signal type
-   (celltower, gps, wifi), estimate location + radius.
-   - Celltower → tighter radius than gps/wifi.
-   - Celltower not always present either — some legs recorded on a phone
-     with no cellular chip (wifi-only device). Don't assume cell_samples
-     exists; fall back to gps/wifi.
-   - Wifi is bonus-only signal, not always present at a station.
+   (celltower, wifi), estimate location + radius. *(Corrected: an earlier
+   version of this step listed `gps` — there is no GPS in `sensors.db`, that
+   is the whole problem.)*
+   - Celltower → tighter radius than wifi, but **absent on 24/50 legs**, so
+     it cannot be the backbone. IMU + track geometry has to carry position;
+     cell is an opportunistic correction where it exists.
+   - Celltower join is ambiguous: our recordings carry only `cellId`, no
+     LAC/TAC, while OpenCelliD's unique key needs `area` too. Expect several
+     candidate towers per observation → multi-hypothesis prior, not a point.
+     `networkType=NR` has no match in the reference CSV at all.
+   - Wifi is bonus-only signal, not always present at a station — and
+     sparser than hoped (see Setup).
 2. **Motion classification** — per motion-sensor type (gyro, accel),
    classify turn as left/right/straight.
 3. **Inter-station timing** — derive time-between-stations; must account
@@ -48,5 +65,14 @@ Current plan, subject to revision as pieces get built/tested:
 5. **Fusion** — estimate raw locations → snap to OSM rail network → use
    time/epoch (clock-drift adjusted) to align against GTFS timetable →
    resolve which station/segment train is at.
+   - Snapping caveat: the OSM network is ~203 disconnected components, so
+     "snap to network" needs the components stitched at way endpoints first.
+   - Name-matching caveat: GTFS `stops.stop_name` is French by default
+     (`Anvers-Central`) while OSM and the leg ids are Dutch
+     (`antwerpen_centraal`) — join via `stop_name_nl`.
 
-Status: idea stage, not yet implemented.
+Open gap in this plan: device orientation. Sensor axes are not track axes and
+the device pose is unknown, so steps 2 and 3 both need an orientation-recovery
+stage before they can use raw accel/gyro axes.
+
+Status: idea stage, not yet implemented. Task breakdown in `TASKS.md`.
