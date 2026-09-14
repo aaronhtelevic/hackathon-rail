@@ -98,6 +98,44 @@ Open gap in this plan: device orientation. Sensor axes are not track axes and
 the device pose is unknown, so steps 2 and 3 both need an orientation-recovery
 stage before they can use raw accel/gyro axes.
 
+### Motion lane, measured (implemented in `motion/shape_stream.py`)
+
+Orientation turned out cheaper than feared, and the speed prior far more
+expensive. Measurements are from `motion/validate_shape.py` over the 44 `good`
+practice legs.
+
+- **Up axis is enough for turns.** Yaw rate = `-dot(gyro, up)` where `up` is a
+  slow EMA of the accelerometer. It needs no heading and no longitudinal axis,
+  so O1 does not gate M1 at all. Net heading error over a whole leg:
+  **median 10 deg, p90 37 deg**. The turn sequence is trustworthy — it is the
+  lane's real product.
+- Gravity EMA must be **slow (tau 60 s)**. At tau 5 s it absorbs the train's
+  own sustained acceleration into "gravity" and the longitudinal channel goes
+  dead.
+- **Accelerometer integration cannot give speed here.** Real train
+  acceleration is ~0.15 m/s^2; track grade and (hand-held) device motion swamp
+  it. Integrated speed on `ic830_00` drifted to **-15 m/s while the train was
+  doing +32**. Dropped as a primary estimator.
+- **Vibration energy does not give speed either.** Fitted accel high-pass RMS
+  against ground-truth speed over 8 good legs at four cutoffs: best log-log
+  correlation **r = 0.18**, exponent 0.3. Unusable. (Plausible cause: the
+  recorder is hand-held, so handling noise dominates rail noise.)
+- **What does work: curve geometry.** `a_lat = v * omega`, so
+  `v = a_lat / omega` while turning. Cant (superelevation) hides part of
+  `a_lat` — by design, at balance speed it hides nearly all of it — so the
+  gyro-integrated roll angle about the forward axis is added back
+  (`a_lat + beta * g * sin(cant)`). Grid-fitted `alpha=0.39, beta=1.0`:
+  **median 39% relative speed error, and only while turning**.
+- The lateral axis itself comes free from the same relation: regress
+  horizontal accel on yaw rate (exponentially-forgetting, causal); the
+  coefficient vector points along lateral and its length scales with mean
+  speed. Forward = lateral x up.
+- **Consequence for the contract**: `length_prior_m` is weak — dead-reckoned
+  leg length lands at **median 39% error, p90 71%**, and legs with almost no
+  curves have no speed evidence at all (`speed_source: "default"`, a flat
+  22 m/s guess). Scale has to come from anchors + GTFS hop duration in
+  hydration. The *topology* is the part to trust.
+
 ## Data contracts
 
 Two engineers work in parallel, so the pipeline is cut at two files. These
@@ -134,7 +172,10 @@ Unscaled route topology. Ordered, contiguous, gap-free in time.
       "moving": false,          // from the stationary detector (M2)
       "speed_prior_mps": 0.0,   // mean over segment, from H2; null if unknown
       "length_prior_m": 0.0,    // speed_prior × duration; null if unknown
-      "confidence": 0.9         // 0..1, how sure the classifier is
+      "confidence": 0.9,        // 0..1, how sure the classifier is
+      "speed_source": "curve"   // curve | regression | default | none
+                                // -- provenance of speed_prior_mps; "default"
+                                // means no IMU speed evidence at all
     }
   ]
 }
@@ -186,5 +227,29 @@ The absolute side carries the scorer and harness because its signal work is
 smaller and less uncertain — orientation recovery is the single hardest
 unknown, so nothing else stacks on top of it.
 
-Status: idea stage, not yet implemented. Task breakdown + owners in
-`TASKS.md`.
+## Viewing a run
+
+`web/` is a read-only viewer over `work/runs/<run_id>/<leg_id>/` — **not**
+`work/<leg_id>/`, which is where the lane contracts live. `shape_stream.py`
+writes both: the contract copy for hydration, and a run directory for the
+viewer (`--no-gui` to skip it).
+
+```bash
+python3 motion/shape_stream.py --all          # writes work/runs/<ts>-motion-lane/
+cd web && npm run install:all && npm run dev  # GUI :5173, API :5174
+```
+
+Segment-close events go into `events.ndjson` as each segment closes, so the
+timeline fills in while the leg is still streaming — which is also the visible
+proof that the algorithm is causal. Port 5174 is sometimes already taken by a
+server from another worktree; `RAIL_GUI_PORT` moves it.
+
+`hydrated.json` is written only when `--warm-start LAT,LON,BEARING` is given.
+Dead reckoning has no absolute position or heading of its own, so without a
+given start pose there is nothing to draw on a map. It is a debug picture, and
+never feeds back into the algorithm.
+
+Status: motion lane (Phase 2 + the H2 prior) implemented in
+`motion/shape_stream.py`, validated by `motion/validate_shape.py` (dev-only,
+reads labels), and wired to the `web/` viewer. Absolute lane still idea stage.
+Task breakdown + owners in `TASKS.md`.

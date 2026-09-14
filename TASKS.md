@@ -15,7 +15,9 @@ Status key: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DROPPED`
 
 ## 0. Where we are
 
-Recon phase complete; **nothing implemented yet**. Schema documented
+Motion lane (Phase 2 + H2) implemented: `motion/shape_stream.py` (causal,
+stdlib-only, ~200x realtime) + `motion/validate_shape.py`. Absolute lane not
+started. Schema documented
 (`DATA_SCHEMA.md`), per-leg coverage survey done (§11), approach sketched in
 `WORKLOG.md` → Algorithm. Next real work is Phase 1 — I7/I1/I2 block
 everything downstream.
@@ -172,12 +174,12 @@ depends on cell/wifi, so this lane never waits on the other.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | M | TODO | Device pose is unknown and arbitrary. Hardest unknown in the project; everything in this phase depends on it. |
-| O2 | Handle orientation changes mid-leg (phone moved/picked up) | M | TODO | Detect and re-estimate rather than assume a fixed pose. Sets `orientation_ok`. |
-| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + signed `turn_deg` | M | TODO | The signal that carries the shape. |
-| M2 | Stationary detector: rolling accel variance → `moving` flag per segment | M | TODO | Feeds H2/H3 and T1. Stopped ≠ at station. |
-| M3 | Write `shape.json` to the frozen contract | M | TODO | Replaces the I7 stub. Keep the stub's schema exactly. |
-| M4 | Sanity-check shapes against GT track geometry on `good` legs | M | TODO | Eyeball turn count/order vs real route before trusting hydration. |
+| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | M | DONE | `motion/shape_stream.py`. Turns need only the **up** axis (`yaw = -dot(gyro,up)`), so O1 never gated M1. Gravity EMA must be slow (tau 60 s) or it eats the train's own acceleration. Lateral/forward axes come from the yaw-rate regression. |
+| O2 | Handle orientation changes mid-leg (phone moved/picked up) | M | DONE | Tilt of the gravity EMA vs a reference >15° → `orientation_ok=false`, axes re-estimated, confidences halved. 0 pose changes on all 50 practice legs. |
+| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + signed `turn_deg` | M | DONE | Hysteresis state machine (enter 0.52 °/s, exit 0.26 °/s, min 2.5 s / 2.5°). Net heading error vs true polylines: **median 10°, p90 37°** over 44 good legs. |
+| M2 | Stationary detector: rolling accel variance → `moving` flag per segment | M | DONE | High-pass accel RMS over a 2 s trailing window + gyro RMS, gate = max(0.085, 1.8 × running quiet floor), 2.5 s hysteresis. |
+| M3 | Write `shape.json` to the frozen contract | M | DONE | `motion/shape_stream.py` → `work/<leg_id>/shape.json` (+ `shape_trace.csv`, `shape.svg`, `shape_stream.jsonl`). One extra field: `speed_source`. Also writes a `work/runs/<run_id>/` copy + live `events.ndjson` for the `web/` viewer (`--no-gui` opts out). |
+| M4 | Sanity-check shapes against GT track geometry on `good` legs | M | DONE | `motion/validate_shape.py` (dev-only). Turn order/heading match well; **length** does not (see H2). Note: `scorer/polylines` chunks sometimes run backwards — reversals >90° are ordering artifacts, not turns. |
 
 ## 5. Phase 3 — Shape hydration (`WORKLOG.md` step 3) — new core
 
@@ -192,7 +194,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
 | H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | TODO | Replaces the I7 stub. Consumes P1–P3. Empty list is a **valid** output (24/50 legs). |
-| H2 | Segment length prior from IMU: speed estimate (accel integration w/ drift control and/or vibration energy → speed regression) | M | TODO | Fills `speed_prior_mps`/`length_prior_m` in `shape.json`. A prior the anchors correct — not the answer. |
+| H2 | Segment length prior from IMU: speed estimate | M | DONE (weak) | Accel integration and vibration energy both **fail** (see `WORKLOG.md` → Motion lane, measured). What works: `v = a_lat/omega` in curves + gyro-derived cant correction → median 39% speed error, **turns only**. Dead-reckoned leg length: median 39% error, p90 71%. Scale must come from anchors/GTFS. |
 | H3 | Stopped-vs-moving resolution per straight segment | J | TODO | M2's `moving` flag proposes, anchors ± radius confirm. Radius width gates confidence. |
 | H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | TODO | **Pair on this.** Start with least-squares / monotone fit before reaching for a particle filter. |
 | H5 | Per-segment confidence out of the solver | J | TODO | Feeds fusion weighting (N3) and the lock-in policy (R4). |
