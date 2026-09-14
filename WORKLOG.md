@@ -57,13 +57,24 @@ Current plan, subject to revision as pieces get built/tested:
    - Wifi is bonus-only signal, not always present at a station — and
      sparser than hoped (see Setup).
 2. **Motion classification** — per motion-sensor type (gyro, accel),
-   classify turn as left/right/straight.
-3. **Inter-station timing** — derive time-between-stations; must account
+   classify turn as left/right/straight → build a route *shape* (sequence
+   of turn/straight segments, no absolute scale/position yet).
+   - Shape from gyro/accel alone has no length/scale per segment — a
+     "straight" segment could be train moving straight OR train stopped.
+     Hydration step (below) resolves which.
+3. **Shape hydration** — stretch/pin the gyro/accel shape using per-signal
+   location estimates (1) + their fault radius:
+   - Segment classified "nothing" (straight/no turn) → gps/wifi/cell
+     estimate ± radius decides: extend the line (train moved) vs. keep
+     it flat (train stopped). Radius width gates confidence of the call.
+   - Turn segments anchor the shape at higher confidence points; straight
+     segments between anchors get stretched to fit estimated positions.
+4. **Inter-station timing** — derive time-between-stations; must account
    for stop-before-stoplight case (stopped ≠ at station).
-4. **Public reference data** used to support 1–3: OSM (rail network/
+5. **Public reference data** used to support 1–4: OSM (rail network/
    stations), GTFS railway schedule, celltower reference CSV.
-5. **Fusion** — estimate raw locations → snap to OSM rail network → use
-   time/epoch (clock-drift adjusted) to align against GTFS timetable →
+6. **Fusion** — hydrated best-effort shape → snap to OSM rail network →
+   use time/epoch (clock-drift adjusted) to align against GTFS timetable →
    resolve which station/segment train is at.
    - Snapping caveat: the OSM network is ~203 disconnected components, so
      "snap to network" needs the components stitched at way endpoints first.
