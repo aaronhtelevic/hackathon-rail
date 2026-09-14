@@ -647,8 +647,16 @@ def write_trace(path, trace):
 
 
 def run_leg(root, leg_dir, out_root, want_svg=True, want_stream=False,
-            run=None, warm_start=None):
-    """Solve one leg. `run` is an optional rail_gui.RunWriter for the viewer."""
+            run=None, warm_start=None, demo_speed=0.0):
+    """Solve one leg. `run` is an optional rail_gui.RunWriter for the viewer.
+
+    `demo_speed`: 0 (default) runs flat-out, as fast as the data can be
+    consumed -- the normal, scoring-time behaviour. A positive value paces
+    segment emission (and a growing shape.json snapshot into the viewer's
+    run dir) to N-times realtime, purely so the GUI has something to draw
+    while the algorithm runs -- it never affects the written contract files
+    or the algorithm itself.
+    """
     db = os.path.join(root, leg_dir, "sensors.db")
     if not os.path.exists(db):
         raise SystemExit("no sensors.db at %s" % db)
@@ -670,10 +678,21 @@ def run_leg(root, leg_dir, out_root, want_svg=True, want_stream=False,
             t_lo = t_hi = None
 
     state = {"last_pct": -1.0}
+    demo_t0 = time.time()
 
     def on_segment(seg, tk):
         if gui is None:
             return
+        if demo_speed > 0 and tk.t_start_ms is not None:
+            target_s = (seg["t_end"] - tk.t_start_ms) / 1000.0 / demo_speed
+            wait_s = target_s - (time.time() - demo_t0)
+            if wait_s > 0:
+                time.sleep(min(wait_s, 4.0))
+            # growing snapshot into the viewer's run dir only -- the real
+            # work/<leg>/shape.json contract is written once, at the end,
+            # same as the demo_speed=0 path.
+            gui.shape({"leg_id": leg_dir, "t_start": tk.t_start_ms, "t_end": seg["t_end"],
+                       "orientation_ok": tk.orientation_ok, "segments": list(tk.segments)})
         pct = None
         if t_lo and t_hi and t_hi > t_lo:
             pct = min(0.99, (seg["t_end"] - t_lo) / float(t_hi - t_lo))
@@ -758,6 +777,10 @@ def main():
                     help="given start pose (warm track). Only used to draw the "
                          "dead-reckoned path on the viewer's map -- never fed "
                          "back into the algorithm.")
+    ap.add_argument("--demo-speed", type=float, default=0.0, metavar="X",
+                    help="pace segment emission to X-times realtime so the "
+                         "viewer has something to watch draw (0 = flat-out, "
+                         "the default / scoring behaviour)")
     a = ap.parse_args()
 
     warm = None
@@ -799,7 +822,7 @@ def main():
     try:
         for d in legs:
             run_leg(a.practice_dir, d, a.out_dir, not a.no_svg, a.stream_log,
-                    run=run, warm_start=warm)
+                    run=run, warm_start=warm, demo_speed=a.demo_speed)
     except BaseException:
         if run is not None:
             run.finish("error")

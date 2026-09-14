@@ -32,12 +32,15 @@ def main():
     ap.add_argument("--legs", nargs="*")
     ap.add_argument("--run-id", dest="run_id")
     ap.add_argument("--notes", default="joint run: motion shape + absolute anchors/position per leg")
+    ap.add_argument("--demo-speed", type=float, default=0.0, metavar="X",
+                    help="pace both lanes' writes to X-times realtime so the viewer "
+                         "draws the shape/timeline/map live (0 = flat-out, the default)")
     a = ap.parse_args()
     legs = a.legs or paths.practice_legs()
     with RunWriter("joint", lane="joint", track="warm", run_id=a.run_id, notes=a.notes) as run:
         for leg in legs:
-            motion_run_leg(str(paths.PRACTICE), leg, str(paths.WORK), run=run)
-            info = solve.solve_warm(leg, a.team, gui=run.leg(leg))
+            motion_run_leg(str(paths.PRACTICE), leg, str(paths.WORK), run=run, demo_speed=a.demo_speed)
+            info = solve.solve_warm(leg, a.team, gui=run.leg(leg), demo_speed=a.demo_speed)
             rep = harness.score(leg, "warm", paths.WORK / "submissions" / a.team / "warm" / leg)
             run.leg(leg).score(rep)
             f = harness.flatten(rep)

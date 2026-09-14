@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,9 +139,15 @@ def _ev(gui, stage, msg, **kw):
 
 
 def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None,
-               gui=None) -> dict:
+               gui=None, demo_speed: float = 0.0) -> dict:
     """`gui` is an optional web/python/rail_gui.LegWriter: when given, anchors.json,
-    hydrated.json, the CSVs and progress events are mirrored into its run directory."""
+    hydrated.json, the CSVs and progress events are mirrored into its run directory.
+
+    `demo_speed`: 0 (default) writes the full hydrated polyline in one shot,
+    same as always. A positive value paces the write of hydrated.json's
+    polyline to X-times realtime, point by point, purely so the viewer's map
+    has something to draw while this (otherwise near-instant) solve runs --
+    it never changes position.csv or the algorithm."""
     ws = ws or warm_from_meta(leg_id)
     t_lo, t_hi = sensor_span_ms(leg_id)
     T = (t_hi - ws.t0_ms) / 1000.0
@@ -197,9 +204,19 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
     _ev(gui, "N3", f"path {L:.0f} m, rolling {info['window']}", pct=0.8)
     _ev(gui, "T4", f"500 m-out call '{dest.name}' at +{(call_ms - ws.t0_ms) / 1000:.0f}s", pct=0.9)
     if gui is not None:
-        gui.hydrated([{"t": int(t), "lat": float(ll[1]), "lon": float(ll[0]), "distance_m": float(dd)}
-                      for t, ll, dd in zip(t_ms, lonlat, dist)],
-                     route_guess=hop.route_guess, destination=dest.name, path_len_m=L)
+        polyline = [{"t": int(t), "lat": float(ll[1]), "lon": float(ll[0]), "distance_m": float(dd)}
+                    for t, ll, dd in zip(t_ms, lonlat, dist)]
+        if demo_speed > 0 and polyline:
+            demo_t0 = time.time()
+            step = max(1, len(polyline) // 80)  # ~80 map updates across the leg
+            for i in range(step, len(polyline), step):
+                target_s = (polyline[i - 1]["t"] - ws.t0_ms) / 1000.0 / demo_speed
+                wait_s = target_s - (time.time() - demo_t0)
+                if wait_s > 0:
+                    time.sleep(min(wait_s, 3.0))
+                gui.hydrated(polyline[:i], route_guess=hop.route_guess,
+                             destination=dest.name, path_len_m=L)
+        gui.hydrated(polyline, route_guess=hop.route_guess, destination=dest.name, path_len_m=L)
         _mirror(gui, d)
     return info
 

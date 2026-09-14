@@ -20,13 +20,15 @@ def main():
     ap.add_argument("--legs", nargs="*")
     ap.add_argument("--run-id", dest="run_id", help="run directory name (default: timestamped)")
     ap.add_argument("--notes", default="absolute-only warm solver: GTFS hop + OSM path + schedule timing")
+    ap.add_argument("--demo-speed", type=float, default=0.0, metavar="X",
+                    help="pace hydrated.json writes to X-times realtime (0 = flat-out)")
     a = ap.parse_args()
     legs = a.legs or paths.practice_legs()
     with RunWriter("absolute-warm", lane="absolute", track="warm",
                    run_id=a.run_id, notes=a.notes) as run:
         for leg in legs:
             with run.leg(leg) as lw:
-                info = solve.solve_warm(leg, a.team, gui=lw)
+                info = solve.solve_warm(leg, a.team, gui=lw, demo_speed=a.demo_speed)
                 rep = harness.score(leg, "warm", paths.WORK / "submissions" / a.team / "warm" / leg)
                 lw.score(rep)
                 f = harness.flatten(rep)
