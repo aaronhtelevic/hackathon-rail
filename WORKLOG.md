@@ -329,6 +329,19 @@ Code: `absolute/hydrate.py`, called from `absolute/solve.py::solve_warm` and
   and W_SPEED 0.25→0.10 each helped; further changes (W_TURN 100, prior cap
   500–2000, W_PRIOR 0.6) move the median by <10 m either way. Stopped there —
   the scorer README's over-tuning warning applies.
+- **The trajectory is checked back against the timetable** (`solve.schedule_check`,
+  the missing half of step 4). Hydration answers *where and when* on a candidate
+  path; that answer has its own departure and arrival instants — the moment the
+  curve passes 100 m and the moment it reaches within 300 m of the end — and those
+  must agree with the GTFS times of the trip being proposed. Measured over the 44
+  good legs: on the correct hop the curve leaves +72 ± 46 s after the scheduled
+  departure and arrives +30 ± 99 s after the scheduled arrival; over 203 wrong
+  candidates the same numbers scatter 266 / 421 s, and 42 % of them never reach
+  their claimed destination inside the recording at all. Scoring that (0.5 s per
+  second of deviation, 600 s for "never arrives") took routes 47 → **48/50** and
+  the mean-of-medians 470 → **310 m**. Note the threshold must exceed
+  `hydrate.END_SLACK_M`, or a curve that legitimately stops 150 m short is
+  scored as "never arrived" — that bug alone cost 2 routes.
 - **Route discovery gets the turn sequence for free**: hydrating the shape
   onto each shortlisted candidate's path and adding `2 s × cost/segment` to the
   GTFS timing cost separates opposite directions (`ic2809_03`, `ic4112_00` now

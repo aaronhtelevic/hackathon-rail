@@ -24,19 +24,24 @@ the same profile. Scores on the 50 practice legs (44 good-GT):
 
 | metric | baseline (`ic830_00` only) | absolute-only, all legs | **+ hydration (Phase 3)** |
 |---|---|---|---|
-| position, median-of-medians (good GT) | 974 m | 324 m (mean-of-medians 687 m) | **202 m** (mean 470 m) |
-| route correct / lock-in | — | 44/50, 0 s | **47/50**, 0 s |
-| station call detected / median \|timing\| | 0/1 | 40/50, 17 s | **42/50**, 19 s — the 7 misses with a correct route are **unscoreable** (500 m reference moment falls in a GT gap) |
+| position, median-of-medians (good GT) | 974 m | 324 m (mean-of-medians 687 m) | **194 m** (mean 310 m) |
+| route correct / lock-in | — | 44/50, 0 s | **48/50**, 0 s |
+| station call detected / median \|timing\| | 0/1 | 40/50, 17 s | **43/50**, 19 s — the 7 misses with a correct route are **unscoreable** (500 m reference moment falls in a GT gap) |
 
 *Hydration* (`absolute/hydrate.py`, joint, 2026-09-14 13h): the shape's
 segment boundaries are fitted onto the candidate OSM path by exact DP —
 turns pin, believed stops hold, cell anchors and the schedule trapezoid pull
 weakly. The same fit cost, per segment, re-ranks the GTFS shortlist: the IMU
 turn sequence tells opposite directions apart where timing cannot
-(`ic2809_03`, `ic4112_00` fixed). Remaining route misses: 2 same-hop/same-minute
-pairs (`ic2035`/`s33 2963`, `ic3033`/`ic2633`) and `l1679_02` (timing prefers
-the wrong direction by 253 s; shape prefers the right one, but weighting it
-enough to win there flips `ic2809_04`). Biggest remaining position errors are
+(`ic2809_03`, `ic4112_00` fixed). The hydrated trajectory is then **checked back
+against GTFS** (`solve.schedule_check`): when the curve leaves the platform and
+when it reaches the destination, versus this trip's scheduled departure and
+arrival. On the correct hop that is +72 ± 46 s and +30 ± 99 s; wrong candidates
+scatter 266 / 421 s and 42 % never reach the destination at all. Adding it
+(`SCHED_COST_PER_S`) fixed `ic2035_00`, `l1679_02` and the `ic536_01` timing
+outlier: **47 → 48/50 routes, mean-of-medians 470 → 310 m.** Remaining misses
+are the 2 same-hop/same-minute pairs (`ic2809`/`ic2334`, `ic3033`/`ic2633`)
+where every signal we have is identical. Biggest remaining position errors are
 legs where the stationary detector misses the platform dwell entirely
 (`ic3013_03`: one 235 s "moving" straight covering the dwell) — the schedule
 prior is what saves those.
@@ -272,7 +277,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 | N2 | Precompute curvature signature per candidate OSM route | A | TODO | What M1's turn sequence gets matched against. Build it to consume `shape.json` directly. |
 | N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | J | DONE | Folded into hydration: the fit *is* the snap — knots are distances along the chosen OSM path, emitted as lat/lon (scorer projects). `sigma_m` (H5) not yet weighted in. |
 | N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | A | DONE | Measured, not corrected: t0 sits within ±2 min of scheduled departure on all legs, symmetric. No clock-drift term needed at this accuracy. |
-| N5 | Align to GTFS timetable (arrival times along the matched route) | A | DONE | Folded into `absolute/gtfs.py::rank_hops` + `absolute/solve.py::motion_window`: scheduled dep/arr define the timing prior. |
+| N5 | Align to GTFS timetable (arrival times along the matched route) | A | DONE | Three-stage ranking in `solve.choose_hop`: (1) `gtfs.rank_hops` timing shortlist, (2) cell-anchor misfit + per-segment hydration cost, (3) **`schedule_check`** — the hydrated curve's own departure/arrival instants (crossing 100 m / L−300 m) compared with this trip's GTFS times, +72 s / +20 s typical, 0.5 s cost per second of deviation, 600 s if it never arrives. Sweeps in `work/sweep_*.log`; per-candidate numbers in `work/gtfs_consistency.csv`. |
 | N6 | Tunnel / long-gap behaviour — keep emitting sane estimates | J | TODO | GT has >60 s gaps; we still have to output rows. |
 
 ## 7. Phase 5 — Route discovery (metrics #1, #2)
@@ -323,7 +328,7 @@ hydrated curve crosses `L − 500`, nothing more.
 ### Cold start / first fix (metrics #4, #5) — W3 decided: built
 
 Practice cold track (12 legs with a fix, 7 good-GT): position 178 m
-median-of-medians, TTFF 5 s, first-fix error 87 m, 9 routes, 11 station
+median-of-medians, TTFF 5 s, first-fix error 87 m, 10 routes, 11 station
 calls. `scripts/run_scoring.py --dataset … --out … [--score]` runs both tracks.
 
 | ID | Task | Own | Status | Notes |

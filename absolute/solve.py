@@ -142,6 +142,18 @@ SHAPE_COST_PER_M = 2.0     # seconds of cost per metre of hydration penalty *per
                            # that timing cannot (fixes ic2809_03, ic4112_00; l1679_02 needs > 2.6 while
                            # ic2809_04 breaks above 2.58 — a flat per-metre rate broke both).
 NO_PATH_COST_S = 1e6       # a destination we cannot route to on OSM is useless to us
+# GTFS consistency of the *hydrated* trajectory (measured on the 44 good legs, correct hop):
+# the curve leaves the platform 72 +- 46 s after the scheduled departure and gets within
+# ARRIVE_M of the destination 30 +- 99 s after the scheduled arrival; wrong candidates
+# scatter 266 / 421 s, and 42 % of them never reach the destination at all (3/44 correct do
+# not either — hairpin routes whose OSM path is 2 km too long — hence a finite penalty).
+SCHED_DEP_LATE_S = 72.0
+SCHED_ARR_LATE_S = 20.0
+SCHED_NONE_S = 600.0       # penalty when the curve never reaches the destination (300 loses 1 route + 200 m mean)
+SCHED_COST_PER_S = 0.5     # seconds of ranking cost per second of departure/arrival mismatch
+PLATFORM_M = 100.0         # "left the platform" threshold on the curve
+ARRIVE_M = 300.0           # "reached the destination" threshold — must exceed hydrate.END_SLACK_M (150),
+                           # else a curve that legitimately ends 150 m short never "arrives" (600 s penalty)
 
 
 def anchor_misfit_m(path: track.Path, anchor_doc: dict, t_from_ms: int) -> float:
@@ -161,6 +173,22 @@ def _prior_for(ws: WarmStart, hop: gtfs.Hop, t_hi_ms: int, L: float):
     t_move, t_stop = motion_window(ws.t0_ms, hop.dep_ms, t_hi_ms)
     Tm = (t_stop - t_move) / 1000.0
     return lambda t: trapezoid_distance((np.asarray(t) - t_move) / 1000.0, Tm, L)
+
+
+def schedule_check(hyd: "hydrate.Hydrated", hop: gtfs.Hop, L: float) -> dict:
+    """Hydrated departure/arrival instants vs the GTFS times of this hop (seconds, + = late)."""
+    t_dep = hyd.time_at_distance(PLATFORM_M)
+    t_arr = hyd.time_at_distance(max(0.0, L - ARRIVE_M))
+    return {"dep_late_s": None if t_dep is None else round((t_dep - hop.dep_ms) / 1000.0, 1),
+            "arr_late_s": None if t_arr is None else round((t_arr - hop.arr_ms) / 1000.0, 1)}
+
+
+def schedule_cost(chk: dict) -> float:
+    c = 0.0
+    for key, typical in (("dep_late_s", SCHED_DEP_LATE_S), ("arr_late_s", SCHED_ARR_LATE_S)):
+        v = chk.get(key)
+        c += SCHED_COST_PER_S * (abs(v - typical) if v is not None else SCHED_NONE_S)
+    return c
 
 
 def choose_hop(ws: WarmStart, observed_duration_s: float, leg_id: str | None = None,
@@ -196,6 +224,7 @@ def choose_hop(ws: WarmStart, observed_duration_s: float, leg_id: str | None = N
             try:
                 hy = hydrate.hydrate(shape, doc, pth, _prior_for(ws, h, t_hi, pth.length_m))
                 cost += SHAPE_COST_PER_M * hy.cost / max(hy.n_segments, 1)
+                cost += schedule_cost(schedule_check(hy, h, pth.length_m))   # trajectory vs timetable
             except ValueError:
                 pass
         rescored.append((h, cost))
@@ -276,10 +305,13 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
         dist = hyd.distance_at(t_ms)
         call_t = hyd.time_at_distance(max(0.0, L - APPROACH_M))
         call_ms = int(call_t) if call_t is not None else int(t_hi)
-        info["window"] = f"hydrated {hyd.n_segments} segs, {hyd.n_anchors} anchors, cost {hyd.cost:.0f}"
+        chk = schedule_check(hyd, hop, L)
+        info["schedule_check"] = chk
+        info["window"] = (f"hydrated {hyd.n_segments} segs, {hyd.n_anchors} anchors, cost {hyd.cost:.0f}; "
+                          f"vs GTFS: left {chk['dep_late_s']} s after dep, arrived {chk['arr_late_s']} s after arr")
         (paths.WORK / leg_id).mkdir(parents=True, exist_ok=True)
         (paths.WORK / leg_id / "hydrated.json").write_text(
-            json.dumps({"leg_id": leg_id, "path_len_m": L, **hyd.to_json()}, indent=1), encoding="utf-8")
+            json.dumps({"leg_id": leg_id, "path_len_m": L, "schedule_check": chk, **hyd.to_json()}, indent=1), encoding="utf-8")
         extra = {"knots": hyd.to_json()["knots"], "source": "hydration"}
         _ev(gui, "H4", info["window"] + (f" — {'; '.join(hyd.notes)}" if hyd.notes else ""),
             level="warn" if hyd.notes else "info", pct=0.7)
