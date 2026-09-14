@@ -17,6 +17,7 @@
   let osmStationsLayer // L.GeoJSON — reference station/halt points
   let showNetwork = $state(true)
   let showStations = $state(false)
+  let showCircles = $state(false)
   let osmError = $state(null)
 
   onMount(() => {
@@ -63,6 +64,11 @@
     else map.removeLayer(osmStationsLayer)
   }
 
+  function toggleCircles () {
+    showCircles = !showCircles
+    draw()
+  }
+
   onDestroy(() => map?.remove())
 
   const colorOf = source => ({ wifi: 'var(--accent)', warm_start: 'var(--ok)' }[source] ?? 'var(--absolute)')
@@ -77,11 +83,13 @@
       for (const c of a.candidates ?? []) {
         const ll = [c.lat, c.lon]
         bounds.push(ll)
-        L.circle(ll, {
-          radius: c.radius_m ?? 500,
-          color: colorOf(a.source), weight: 0, fillColor: colorOf(a.source),
-          fillOpacity: 0.06 + 0.3 * (c.weight ?? 1),
-        }).addTo(layer)
+        if (showCircles) {
+          L.circle(ll, {
+            radius: c.radius_m ?? 500,
+            color: colorOf(a.source), weight: 0, fillColor: colorOf(a.source),
+            fillOpacity: 0.06 + 0.3 * (c.weight ?? 1),
+          }).addTo(layer)
+        }
         L.circleMarker(ll, {
           radius: 3, color: '#0b0d12', weight: 1, fillColor: colorOf(a.source), fillOpacity: 1,
         }).bindTooltip(`${a.source} @ ${new Date(a.t).toLocaleTimeString()} · w=${c.weight ?? 1} · ±${c.radius_m ?? '?'} m`)
@@ -93,6 +101,11 @@
       const line = poly.map(p => [p.lat ?? p[0], p.lon ?? p[1]])
       bounds.push(...line)
       L.polyline(line, { color: 'var(--joint)', weight: 2, lineJoin: 'round' }).addTo(layer)
+
+      const last = line[line.length - 1]
+      L.circleMarker(last, {
+        radius: 7, color: '#fff', weight: 2, fillColor: '#1e6bff', fillOpacity: 1,
+      }).bindTooltip('estimated current location').addTo(layer)
     }
 
     if (bounds.length) map.fitBounds(bounds, { padding: [26, 26] })
@@ -107,6 +120,7 @@
 <div class="layers">
   <label><input type="checkbox" checked={showNetwork} onchange={toggleNetwork} /> OSM rail network</label>
   <label><input type="checkbox" checked={showStations} onchange={toggleStations} /> OSM stations</label>
+  <label><input type="checkbox" checked={showCircles} onchange={toggleCircles} /> anchor uncertainty circles</label>
   {#if osmError}<span class="dim err">OSM layers failed: {osmError}</span>{/if}
 </div>
 <div class="map" bind:this={el}></div>
