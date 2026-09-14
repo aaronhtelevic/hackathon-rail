@@ -78,17 +78,8 @@ class RailGraph:
         d, idx = self.tree.query(self._to_xy(np.array([[lon, lat]]))[0], k=k, distance_upper_bound=radius_m)
         return [int(i) for i, di in zip(idx, d) if np.isfinite(di)]
 
-    def route(self, lon_a, lat_a, lon_b, lat_b) -> Path | None:
-        """Cheapest path between the two locations, trying a few snap nodes each side."""
-        src = self.nearest_nodes(lon_a, lat_a)
-        dst = self.nearest_nodes(lon_b, lat_b)
-        if not src or not dst:
-            return None
-        dist, pred, _ = dijkstra(self.adj, indices=src, return_predecessors=True, min_only=True)
-        best = min(dst, key=lambda j: dist[j])
-        if not np.isfinite(dist[best]):
-            return None
-        seq = [best]
+    def _trace(self, pred, node: int) -> Path:
+        seq = [node]
         while pred[seq[-1]] >= 0:
             seq.append(int(pred[seq[-1]]))
         seq.reverse()
@@ -96,6 +87,26 @@ class RailGraph:
         xy = self._to_xy(lonlat)
         step = np.hypot(*np.diff(xy, axis=0).T)
         return Path(lonlat, np.concatenate([[0.0], np.cumsum(step)]))
+
+    def paths_from(self, lon_a, lat_a, dests) -> list[Path | None]:
+        """Cheapest path from one origin to each of `dests` [(lon, lat), ...]. The dijkstra
+        already spans the whole graph, so its predecessor tree serves every destination:
+        one origin against N candidates costs one dijkstra, not N. The cold track ranks
+        hundreds of hops per origin, which is the difference between 30 s and 3 min a leg."""
+        src = self.nearest_nodes(lon_a, lat_a)
+        if not src:
+            return [None] * len(dests)
+        dist, pred, _ = dijkstra(self.adj, indices=src, return_predecessors=True, min_only=True)
+        out: list[Path | None] = []
+        for lon_b, lat_b in dests:
+            dst = self.nearest_nodes(lon_b, lat_b)
+            best = min(dst, key=lambda j: dist[j]) if dst else None
+            out.append(self._trace(pred, best) if best is not None and np.isfinite(dist[best]) else None)
+        return out
+
+    def route(self, lon_a, lat_a, lon_b, lat_b) -> Path | None:
+        """Cheapest path between the two locations, trying a few snap nodes each side."""
+        return self.paths_from(lon_a, lat_a, [(lon_b, lat_b)])[0]
 
 
 def build() -> RailGraph:
