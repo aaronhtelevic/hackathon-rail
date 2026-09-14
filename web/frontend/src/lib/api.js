@@ -25,6 +25,8 @@ export const getEvents = (runId, legId, cursor = 0, limit = 500) =>
   getJson(`/api/runs/${encodeURIComponent(runId)}/legs/${encodeURIComponent(legId)}/events?cursor=${cursor}&limit=${limit}`)
 export const fileUrl = (runId, legId, name) =>
   `/api/runs/${encodeURIComponent(runId)}/legs/${encodeURIComponent(legId)}/file/${encodeURIComponent(name)}`
+export const exportUrl = (runId, team = 'televic') =>
+  `/api/runs/${encodeURIComponent(runId)}/export?team=${encodeURIComponent(team)}`
 
 // --- launcher ---------------------------------------------------------------
 export const listLegs = () => getJson('/api/legs')

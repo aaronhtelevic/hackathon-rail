@@ -1,5 +1,5 @@
 <script>
-  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, listJobs, watchChanges, clearRuns } from './lib/api.js'
+  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, exportUrl, listJobs, watchChanges, clearRuns } from './lib/api.js'
   import RunLauncher from './lib/RunLauncher.svelte'
   import LaneTimeline from './lib/LaneTimeline.svelte'
   import AnchorMap from './lib/AnchorMap.svelte'
@@ -160,6 +160,10 @@
     <button aria-pressed={tab === 'detail'} onclick={() => (tab = 'detail')}>run detail</button>
     <button aria-pressed={tab === 'scores'} onclick={() => (tab = 'scores')}>all scores</button>
   </div>
+  <a class="button {!selectedRun ? 'disabled' : ''}" href={selectedRun ? exportUrl(selectedRun) : '#'}
+     aria-disabled={!selectedRun} download title={selectedRun ? `export ${selectedRun} as submission zip` : 'pick a run first'}>
+    export submission zip
+  </a>
   <button class="danger" disabled={clearing} onclick={onClearRuns}>{clearing ? 'clearing…' : 'clear all output'}</button>
   <button class="theme-toggle" onclick={toggleTheme} title="toggle light/dark theme">
     {theme === 'light' ? '☀︎ light' : '☾ dark'}
@@ -268,6 +272,12 @@
   .tabs { display: flex; gap: 4px; }
   .tabs button { font-size: 12px; }
   .danger:hover { border-color: var(--bad); color: var(--bad); }
+  a.button {
+    display: inline-flex; align-items: center; font: inherit; font-size: 12px;
+    padding: 5px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2);
+    color: inherit; text-decoration: none; cursor: pointer;
+  }
+  a.button.disabled { pointer-events: none; opacity: 0.5; }
   .path { margin-left: auto; font-size: 11px; }
   .banner { background: #3a1e22; border-bottom: 1px solid var(--bad); color: var(--bad); padding: 6px 14px; font-size: 12px; }
 

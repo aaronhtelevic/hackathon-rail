@@ -405,6 +405,91 @@ setInterval(() => { pollOnce().catch(err => console.error('[watch]', err)) }, PO
 
 // ------------------------------------------------------------------ handlers
 
+// ------------------------------------------------------------- zip (STORE)
+//
+// No dependency and no compression — submission CSVs are small text files,
+// so STORE (method 0) keeps this to a CRC32 table + local/central headers.
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1)
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+function crc32 (buf) {
+  let c = 0xffffffff
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+/** Build a minimal uncompressed ZIP from [{name, data: Buffer}]. */
+function buildZip (entries) {
+  const localParts = []
+  const centralParts = []
+  let offset = 0
+  const now = new Date()
+  const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xffff
+  const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xffff
+
+  for (const { name, data } of entries) {
+    const nameBuf = Buffer.from(name, 'utf8')
+    const crc = crc32(data)
+    const localHeader = Buffer.alloc(30)
+    localHeader.writeUInt32LE(0x04034b50, 0)
+    localHeader.writeUInt16LE(20, 4)          // version needed
+    localHeader.writeUInt16LE(0x0800, 6)      // flags: UTF-8 filenames
+    localHeader.writeUInt16LE(0, 8)           // method: STORE
+    localHeader.writeUInt16LE(dosTime, 10)
+    localHeader.writeUInt16LE(dosDate, 12)
+    localHeader.writeUInt32LE(crc, 14)
+    localHeader.writeUInt32LE(data.length, 18)
+    localHeader.writeUInt32LE(data.length, 22)
+    localHeader.writeUInt16LE(nameBuf.length, 26)
+    localHeader.writeUInt16LE(0, 28)
+    localParts.push(localHeader, nameBuf, data)
+
+    const centralHeader = Buffer.alloc(46)
+    centralHeader.writeUInt32LE(0x02014b50, 0)
+    centralHeader.writeUInt16LE(20, 4)        // version made by
+    centralHeader.writeUInt16LE(20, 6)        // version needed
+    centralHeader.writeUInt16LE(0x0800, 8)
+    centralHeader.writeUInt16LE(0, 10)
+    centralHeader.writeUInt16LE(dosTime, 12)
+    centralHeader.writeUInt16LE(dosDate, 14)
+    centralHeader.writeUInt32LE(crc, 16)
+    centralHeader.writeUInt32LE(data.length, 20)
+    centralHeader.writeUInt32LE(data.length, 24)
+    centralHeader.writeUInt16LE(nameBuf.length, 28)
+    centralHeader.writeUInt16LE(0, 30)        // extra len
+    centralHeader.writeUInt16LE(0, 32)        // comment len
+    centralHeader.writeUInt16LE(0, 34)        // disk number start
+    centralHeader.writeUInt16LE(0, 36)        // internal attrs
+    centralHeader.writeUInt32LE(0, 38)        // external attrs
+    centralHeader.writeUInt32LE(offset, 42)
+    centralParts.push(centralHeader, nameBuf)
+
+    offset += localHeader.length + nameBuf.length + data.length
+  }
+
+  const centralStart = offset
+  const centralBuf = Buffer.concat(centralParts)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(entries.length, 8)
+  eocd.writeUInt16LE(entries.length, 10)
+  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt32LE(centralStart, 16)
+  eocd.writeUInt16LE(0, 20)
+
+  return Buffer.concat([...localParts, centralBuf, eocd])
+}
+
 /** Summary of one run: its run.json plus per-leg status. */
 async function describeRun (runId) {
   const runDir = safeRunPath(runId)
@@ -544,6 +629,36 @@ async function handleApi (req, res, url) {
     }
     runs.sort((a, b) => b.mtimeMs - a.mtimeMs)
     return sendJson(res, 200, { runs })
+  }
+
+  // GET /api/runs/:runId/export?team=televic  — zip of position.csv + station_calls.csv
+  // per leg, laid out as <team>/<cold|warm>/<leg_id>/{position,station_calls}.csv
+  if (seg.length === 4 && seg[1] === 'runs' && seg[3] === 'export') {
+    const runId = seg[2]
+    const run = await describeRun(runId)
+    if (!run) return sendJson(res, 400, { error: 'bad run id' })
+    const team = (url.searchParams.get('team') || 'televic').replace(/[^a-z0-9_-]/gi, '_')
+    const track = run.meta?.track === 'cold' ? 'cold' : 'warm'
+    const entries = []
+    for (const leg of run.legs) {
+      for (const name of ['position.csv', 'station_calls.csv']) {
+        if (!leg.files[name]) continue
+        const file = safeRunPath(runId, leg.leg_id, name)
+        try {
+          const data = await fsp.readFile(file)
+          entries.push({ name: `${team}/${track}/${leg.leg_id}/${name}`, data })
+        } catch { /* vanished mid-export */ }
+      }
+    }
+    if (!entries.length) return sendJson(res, 404, { error: 'no submission files in this run yet' })
+    const zip = buildZip(entries)
+    res.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-length': zip.length,
+      'content-disposition': `attachment; filename="${team}-${track}-${runId}.zip"`,
+      'cache-control': 'no-store',
+    })
+    return res.end(zip)
   }
 
   // GET /api/runs/:runId
