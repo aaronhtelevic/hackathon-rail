@@ -74,6 +74,13 @@ for A/B runs). Note `motion_window` no longer reads the shape's first/last
 first flicker fires long before the train rolls; hydration consumes the flags
 properly instead.
 
+**And they now run as one stream, not one after the other** (`joint/stream.py`,
+`run_joint.py --stream`, **H8**): shape and anchors advance on a single
+leg-time clock and the hydration DP re-fits the prefix as they go, so hydrated
+points are emitted while the leg plays instead of all at the end. That is what
+the GUI launches; the shell default stays batch for the 50-leg sweep. The
+submission is produced the same way in both modes, so scores are identical.
+
 **Decision taken (A):** we submit **`latitude,longitude`**, not
 `distanceAlongTrackM`. The scorer projects onto its own polyline, so we never
 have to reproduce the organizers' distance origin — and it makes the "will
@@ -255,6 +262,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 | H5 | Per-segment confidence out of the solver | J | DONE | `sigma_m` per knot from forward+backward DP (softmin, T=150 m). Written to `hydrated.json` knots; not yet used downstream. |
 | H6 | Output: hydrated polyline + `distance-along-time` curve | J | DONE | `work/<leg>/hydrated.json` (`knots[{t,distance_m,sigma_m}]`, cost, notes) + the GUI `hydrated.json` polyline with `knots`. `solve_warm` samples the curve every 5 s for `position.csv`; the 500 m-out call is the curve crossing L−500. |
 | H7 | No-anchor fallback: leg with zero cell **and** useless wifi | J | DONE | Zero anchors is just fewer DP terms; the schedule prior + turns/stops carry it. Verified: all 24 cell-less legs solve; `ic2809_05` 1361 → 180 m with no anchors. |
+| H8 | Stream it: shape + anchors on one leg-time clock, hydrated points out | J | DONE | `joint/stream.py` (`run_joint.py --stream`, what the GUI launches). IMU feeds `ShapeTracker`, cell anchors are released as their timestamp passes, and the DP re-fits the **prefix** every `--refit-every` leg-seconds (`hydrate(pin_end=False, grid_cells_max=350)` — no end pin because the train hasn't arrived, coarse grid because it runs ~18x/leg). The open segment is included provisionally (`ShapeTracker.preview_segment()`), else the map stalls through long straights. Route shortlist re-ranks live off the prefix fit: `ic4112_00` flips from the wrong `s1 1985` to the correct `ic4112` the moment the first anchors land at +210 s. Submission still comes from `solve_warm()` on the completed contracts — identical score (`ic830_00`: 203.9 m both ways). |
 
 ## 6. Phase 4 — Map matching & fusion (`WORKLOG.md` step 6) → metric #3
 

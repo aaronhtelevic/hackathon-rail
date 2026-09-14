@@ -59,6 +59,10 @@ const LANES = {
     label: 'joint run',
     script: 'scripts/run_joint.py',
     needsPandas: true, // absolute-side deps; motion side is stdlib-only either way
+    // --stream: shape and anchors advance on one leg-time clock and hydrated
+    // points come out as they go, which is the whole point of watching a run.
+    // The 50-leg scoring sweep runs the batch path from a shell instead.
+    extraArgs: ['--stream'],
     // run_joint.py defaults to every practice leg when --legs is omitted
     legArgs: (legs, all) => (all ? [] : ['--legs', ...legs]),
   },
@@ -172,7 +176,8 @@ async function startJob ({ lane, legs, allLegs, notes, demoSpeed }) {
   const validSpeed = Number.isFinite(speed) && speed > 0 ? Math.min(speed, 1000) : 0
 
   const runId = `${stamp()}-${lane}`
-  const args = [spec.script, '--run-id', runId, ...spec.legArgs(picked, allLegs)]
+  const args = [spec.script, '--run-id', runId, ...(spec.extraArgs ?? []),
+                ...spec.legArgs(picked, allLegs)]
   if (notes) args.push('--notes', String(notes).slice(0, 300))
   if (validSpeed) args.push('--demo-speed', String(validSpeed))
 

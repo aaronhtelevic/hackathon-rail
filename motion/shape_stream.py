@@ -538,6 +538,36 @@ class ShapeTracker:
 
     # -- output ------------------------------------------------------------
 
+    def preview_segment(self):
+        """The still-open segment, as a provisional entry for a prefix snapshot
+        (joint/stream.py). Never part of shape.json: the state machine has not
+        decided this segment yet, so it carries `provisional` and a low
+        confidence. Without it a prefix stops at the last *closed* boundary,
+        which on a long straight means minutes of nothing new to draw."""
+        c = self.cur
+        if c is None or self.t_ms is None:
+            return None
+        dur = (self.t_ms - c["t_start"]) / 1000.0
+        if dur < SEG_MIN_S:
+            return None
+        turn_deg = math.degrees(c["turn_rad"])
+        typ = c["type"]
+        if typ != "straight":
+            typ = "straight" if abs(turn_deg) < TURN_MIN_DEG else ("right" if turn_deg > 0 else "left")
+        return {
+            "seg_id": len(self.segments),
+            "type": typ,
+            "t_start": c["t_start"],
+            "t_end": self.t_ms,
+            "turn_deg": round(turn_deg, 2),
+            "moving": bool(self.moving),
+            "speed_prior_mps": round(c["dist"] / dur, 3),
+            "length_prior_m": round(c["dist"], 1),
+            "confidence": 0.3,
+            "speed_source": (max(c["src"], key=c["src"].get) if c["src"] else "none"),
+            "provisional": True,
+        }
+
     def finish(self):
         if self.cur is not None and self.t_ms is not None:
             self._close_segment(self.t_ms, "straight")

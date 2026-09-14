@@ -59,16 +59,53 @@ of what hydration needs, and hydration is what turns the shape into a
 scale-correct position and lets it snap to OSM — so there's no point running
 the lanes apart once both contracts are real.
 
-**`--demo-speed X`** (both `motion/shape_stream.py` and
-`absolute/solve.py::solve_warm`, threaded through `run_joint.py` and the web
-GUI's "New run" panel, 2026-09-14): both lanes actually solve a leg in a
-couple seconds flat-out, so the viewer had nothing to watch draw — every
-segment/anchor/point landed before the first poll tick. `X` paces writes to
-X-times realtime instead: motion writes a growing `shape.json` snapshot into
-the viewer's run dir as each segment closes, and the absolute solver writes
-`hydrated.json` in ~80 growing chunks across the leg. Purely a viewer aid —
-`0` (default) keeps the original flat-out behaviour for actual scoring runs;
-neither the algorithms nor the final contract files change.
+**`--demo-speed X`** (`motion/shape_stream.py`, `joint/stream.py`, threaded
+through `run_joint.py` and the web GUI's "New run" panel, 2026-09-14): a leg
+solves in a couple of seconds flat-out, so the viewer had nothing to watch
+draw — everything landed before the first poll tick. `X` paces the run to
+X-times realtime instead. Purely a viewer aid; `0` (default) is flat-out and
+nothing about the algorithms or the written files changes either way.
+
+### Streaming vs batch (`joint/stream.py`, 2026-09-14)
+
+Running the lanes back to back still meant *first* a whole shape, *then* all
+the anchors, *then* one global fit — no intermediate state, and not how this
+would run on a train. `joint/stream.py` joins them on one leg-time clock:
+
+```
+IMU samples  -> shape segments  \
+                                 >-- prefix hydration --> hydrated points
+cell samples -> anchors         /
+```
+
+IMU samples feed the `ShapeTracker`; cell anchors are released the instant
+leg time passes their timestamp; every `--refit-every` leg-seconds the
+hydration DP re-runs **on the prefix** and its knots are emitted as lat/lon.
+Two properties make the prefix fit different from the batch one, both now
+options on `hydrate.hydrate()`:
+
+- **`pin_end=False`** — mid-leg the train has not arrived, so the "last knot
+  sits at the path end" term has to go, or every fit is dragged forward.
+- **`grid_cells_max`** — live refits run a coarse DP grid (350 cells) because
+  they happen ~18x per leg; the final fit runs full resolution.
+
+The still-open segment is included as a **provisional** entry
+(`ShapeTracker.preview_segment()`). Without it the fit stops at the last
+*closed* boundary, and a long straight means minutes with nothing new on the
+map — measured on `ic830_00`: points stalled at 50 for four straight refits,
+now they grow every tick.
+
+Route choice streams too: the GTFS shortlist is built at t0 and re-ranked at
+every refit by how well each candidate path hydrates the prefix. On
+`ic4112_00` the guess sits on the wrong `s1 1985` until the first cell
+anchors arrive at +210 s and then flips to the correct `ic4112` — the two
+input streams visibly deciding the output together.
+
+**Scoring is unaffected.** When the stream ends, the completed `shape.json` +
+`anchors.json` are written and `solve.solve_warm()` builds the submission from
+them exactly as the batch path does. Verified identical on `ic830_00`
+(203.9 m median both ways). The streaming fits drive the live view and the
+live route guess, never the CSVs.
 
 Nothing in it is part of the submission pipeline, and the folder contract is
 exactly the `shape.json`/`anchors.json` contracts below. Full folder/file
@@ -85,11 +122,14 @@ cd web && npm run install:all && npm run dev  # GUI :5173, API :5174 — then us
 Or from a shell, same thing:
 
 ```bash
-.venv/bin/python scripts/run_joint.py          # motion + absolute, one leg entry each → work/runs/<ts>-joint/
+.venv/bin/python scripts/run_joint.py                       # batch: all 50 legs, scoring sweep
+.venv/bin/python scripts/run_joint.py --stream --demo-speed 60 --legs ic830_00_kortrijk_ingelmunster
 ```
 
 Takes `--legs A B C` (full leg directory names) and `--run-id`, which is how
-the GUI names the run it starts. `motion/shape_stream.py` and
+the GUI names the run it starts. The GUI always passes `--stream`; the shell
+default stays batch because the 50-leg sweep does not need ~18 prefix refits
+per leg. `motion/shape_stream.py` and
 `scripts/run_warm_gui.py` still exist and still run stand-alone from a shell
 for lane-local debugging (e.g. iterating on the turn classifier without
 paying for the GTFS/OSM solve every time) — but they no longer represent the
@@ -388,7 +428,7 @@ warm track — one exact anchor, small radius, weight 1.
 |------|------|---------------------|
 | Motion | leg loader, orientation recovery, turn segmentation, stationary detector, speed prior, stop detection | writes `shape.json` |
 | Absolute | track model, OSM stitch + curvature signatures, cell join, wifi, GTFS candidate trips, name matching, `scorer/` harness, batch runner + submission writer | writes `anchors.json` |
-| Joint | **hydration and fusion** | reads both |
+| Joint | **hydration and fusion** (`absolute/hydrate.py`), and the streaming join (`joint/stream.py`) | reads both, emits hydrated points |
 
 Hydration is deliberately not split. It is where the idea actually lives and
 where a bad hand-off costs the most, so it gets paired on rather than divided.
@@ -404,4 +444,7 @@ used to require. **Hydration (step 3) — the join of `shape.json` and
 `anchors.json` — is built** (`absolute/hydrate.py`, section above) and runs
 inside `solve_warm`, so the joint runner now fuses both files per leg.
 Practice warm: 202 m median-of-medians, 47/50 routes, 42/50 station calls.
-Task breakdown + owners in `TASKS.md`.
+`joint/stream.py` runs the same join as a live stream (both lanes on one
+leg-time clock, prefix refits, hydrated points out as they go) for the viewer;
+the submission still comes from `solve_warm` either way. Task breakdown +
+owners in `TASKS.md`.

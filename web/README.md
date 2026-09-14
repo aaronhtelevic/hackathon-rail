@@ -60,17 +60,22 @@ The **New run** panel at the top of the sidebar starts the joint runner
 (`scripts/run_joint.py`), so you don't need a second terminal:
 
 1. tick the practice legs to run on (filter box + *all/none*),
-2. optional notes (they show up in the run list),
-3. **run joint**.
+2. pick a **demo speed** (flat-out, or 10x/30x/100x realtime),
+3. optional notes (they show up in the run list),
+4. **run joint**.
 
-Motion and absolute always run together, per leg, in that order — motion's
-`shape.json` is written before the absolute solver reads it (`motion_window`
-prefers the real `moving` segments over the schedule-dwell prior once it
-exists), and both write into the same leg entry so the viewer shows shape +
-anchors + hydrated + score together. There is no more standalone "motion
-run" or "absolute run"; `motion/shape_stream.py` and `scripts/run_warm_gui.py`
-still work stand-alone from a shell for lane-local debugging, but the GUI
-only launches the joint script.
+The GUI always launches the **streaming** mode (`run_joint.py --stream` →
+`joint/stream.py`): shape segments and cell anchors advance together on one
+leg-time clock, and the hydration DP re-fits the prefix as they arrive, so
+`hydrated.json` grows point by point while the leg plays. That is what makes
+the timeline and the map draw rather than blink into existence. Demo speed
+paces the whole thing — a leg otherwise finishes in a couple of seconds.
+
+Everything lands in one leg entry, so the viewer shows shape + anchors +
+hydrated + score together. There is no standalone "motion run" or "absolute
+run"; `motion/shape_stream.py` and `scripts/run_warm_gui.py` still work from
+a shell for lane-local debugging, and `run_joint.py` without `--stream` is
+the batch path used for the 50-leg scoring sweep.
 
 The view jumps to the new run and fills in as the runner writes. One run at
 a time; **stop** sends `SIGTERM` (then `SIGKILL` after 5 s), and the server

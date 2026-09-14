@@ -123,9 +123,9 @@ class PathGrid:
         return float(self.d[1] - self.d[0]) if len(self.d) > 1 else 1.0
 
 
-def path_grid(path: track.Path) -> PathGrid:
+def path_grid(path: track.Path, grid_cells_max: int = GRID_CELLS_MAX) -> PathGrid:
     L = path.length_m
-    step = max(GRID_MIN_M, L / GRID_CELLS_MAX)
+    step = max(GRID_MIN_M, L / grid_cells_max)
     d = np.arange(0.0, L + step, step)
     d[-1] = min(d[-1], L)
     ll = path.at_distance(d)
@@ -168,13 +168,19 @@ def _believed_stops(tau: np.ndarray, moving: np.ndarray) -> np.ndarray:
 # --------------------------------------------------------------------------- the DP
 
 def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path,
-            prior_distance_at=None) -> Hydrated:
+            prior_distance_at=None, pin_end: bool = True,
+            grid_cells_max: int = GRID_CELLS_MAX) -> Hydrated:
     """`prior_distance_at(t_ms array) -> distance array` is an optional weak timing prior
-    (absolute lane: the GTFS-timed trapezoid) applied at every segment boundary."""
+    (absolute lane: the GTFS-timed trapezoid) applied at every segment boundary.
+
+    `pin_end=False` drops the "the last knot sits at the path end" term: that is
+    what a *prefix* fit needs, since mid-leg the train has not arrived yet
+    (joint/stream.py). `grid_cells_max` trades DP resolution for speed — the
+    live refits run coarse, the final fit runs at full resolution."""
     segs = [s for s in shape.get("segments", []) if s["t_end"] > s["t_start"]]
     if not segs:
         raise ValueError("shape has no segments")
-    pg = path_grid(path)
+    pg = path_grid(path, grid_cells_max)
     J = len(pg.d)
     L = path.length_m
     step = pg.step
@@ -224,7 +230,7 @@ def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path,
     F = np.full((K + 1, J), np.inf)
     F[0] = W_SLACK * np.maximum(0.0, pg.d - START_SLACK_M) + unary[0]
     B = np.full((K + 1, J), np.inf)
-    B[K] = W_SLACK * np.maximum(0.0, np.abs(pg.d - L) - END_SLACK_M)
+    B[K] = W_SLACK * np.maximum(0.0, np.abs(pg.d - L) - END_SLACK_M) if pin_end else np.zeros(J)
     arg = np.zeros((K + 1, J), dtype=int)
     costs = [seg_cost(k) for k in range(K)]
     for k in range(K):
