@@ -35,6 +35,9 @@ Current plan, subject to revision as pieces get built/tested:
 1. **Per-signal location estimate** — for each location-signal type
    (celltower, gps, wifi), estimate location + radius.
    - Celltower → tighter radius than gps/wifi.
+   - Celltower not always present either — some legs recorded on a phone
+     with no cellular chip (wifi-only device). Don't assume cell_samples
+     exists; fall back to gps/wifi.
    - Wifi is bonus-only signal, not always present at a station.
 2. **Motion classification** — per motion-sensor type (gyro, accel),
    classify turn as left/right/straight.
