@@ -107,6 +107,7 @@ const publicJob = j => ({
   legs: j.legs,
   allLegs: j.allLegs,
   notes: j.notes,
+  demoSpeed: j.demoSpeed,
   cmd: j.cmd,
   state: j.state,
   startedAt: j.startedAt,
@@ -142,7 +143,7 @@ class LaunchError extends Error {
 }
 
 /** Spawn one lane runner. */
-async function startJob ({ lane, legs, allLegs, notes }) {
+async function startJob ({ lane, legs, allLegs, notes, demoSpeed }) {
   if (!LAUNCH_ENABLED) throw new LaunchError(403, 'launching is disabled (RAIL_GUI_LAUNCH=0)')
   const spec = LANES[lane]
   if (!spec) throw new LaunchError(400, `unknown lane ${JSON.stringify(lane)}`)
@@ -167,9 +168,13 @@ async function startJob ({ lane, legs, allLegs, notes }) {
     throw new LaunchError(412, `the ${spec.label} needs pandas — create .venv at the repo root first`)
   }
 
+  const speed = Number(demoSpeed)
+  const validSpeed = Number.isFinite(speed) && speed > 0 ? Math.min(speed, 1000) : 0
+
   const runId = `${stamp()}-${lane}`
   const args = [spec.script, '--run-id', runId, ...spec.legArgs(picked, allLegs)]
   if (notes) args.push('--notes', String(notes).slice(0, 300))
+  if (validSpeed) args.push('--demo-speed', String(validSpeed))
 
   const job = {
     job_id: runId,
@@ -178,6 +183,7 @@ async function startJob ({ lane, legs, allLegs, notes }) {
     legs: allLegs ? [...known].sort() : picked,
     allLegs: Boolean(allLegs),
     notes: notes || null,
+    demoSpeed: validSpeed || null,
     cmd: [python, ...args].join(' '),
     state: 'running',
     startedAt: Date.now(),
@@ -471,6 +477,7 @@ async function handleApi (req, res, url) {
       legs: Array.isArray(body.legs) ? body.legs.map(String) : [],
       allLegs: Boolean(body.allLegs),
       notes: body.notes,
+      demoSpeed: body.demoSpeed,
     })
     return sendJson(res, 201, { job: publicJob(job) })
   }

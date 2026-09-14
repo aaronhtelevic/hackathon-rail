@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -155,8 +156,13 @@ def _ev(gui, stage, msg, **kw):
 
 def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None,
                gui=None) -> dict:
-    """`gui` is an optional web/python/rail_gui.LegWriter: when given, anchors.json,
-    hydrated.json, the CSVs and progress events are mirrored into its run directory."""
+    """Batch solve: needs work/<leg>/shape.json to already exist to hydrate.
+    `gui` is an optional web/python/rail_gui.LegWriter: when given, anchors.json,
+    hydrated.json, the CSVs and progress events are mirrored into its run directory.
+
+    The live, synchronized version of this is joint/stream.py — same result,
+    but shape and anchors arrive as one leg-time stream and the hydrated
+    points come out as a third."""
     ws = ws or warm_from_meta(leg_id)
     t_lo, t_hi = sensor_span_ms(leg_id)
     T = (t_hi - ws.t0_ms) / 1000.0

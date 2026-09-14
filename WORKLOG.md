@@ -59,6 +59,17 @@ of what hydration needs, and hydration is what turns the shape into a
 scale-correct position and lets it snap to OSM — so there's no point running
 the lanes apart once both contracts are real.
 
+**`--demo-speed X`** (both `motion/shape_stream.py` and
+`absolute/solve.py::solve_warm`, threaded through `run_joint.py` and the web
+GUI's "New run" panel, 2026-09-14): both lanes actually solve a leg in a
+couple seconds flat-out, so the viewer had nothing to watch draw — every
+segment/anchor/point landed before the first poll tick. `X` paces writes to
+X-times realtime instead: motion writes a growing `shape.json` snapshot into
+the viewer's run dir as each segment closes, and the absolute solver writes
+`hydrated.json` in ~80 growing chunks across the leg. Purely a viewer aid —
+`0` (default) keeps the original flat-out behaviour for actual scoring runs;
+neither the algorithms nor the final contract files change.
+
 Nothing in it is part of the submission pipeline, and the folder contract is
 exactly the `shape.json`/`anchors.json` contracts below. Full folder/file
 spec: `web/README.md`.

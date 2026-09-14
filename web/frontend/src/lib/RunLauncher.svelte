@@ -20,6 +20,16 @@
   let busy = $state(false)
   let error = $state(null)
 
+  // 0 = flat-out (scoring speed, no visible draw). >0 paces both lanes'
+  // writes so the timeline/map fill in while the run is happening.
+  const DEMO_SPEEDS = [
+    { v: 0, label: 'flat-out' },
+    { v: 10, label: '10x' },
+    { v: 30, label: '30x' },
+    { v: 100, label: '100x' },
+  ]
+  let demoSpeed = $state(30)
+
   const running = $derived(jobs.find(j => j.state === 'running'))
   const laneRunning = $derived(jobs.find(j => j.state === 'running' && j.lane === lane))
   const shown = $derived(
@@ -60,6 +70,7 @@
         legs: allLegs ? [] : [...selected],
         allLegs,
         notes: notes.trim() || undefined,
+        demoSpeed: demoSpeed || undefined,
       })
       onstarted(job)
     } catch (e) { error = String(e.message ?? e) } finally { busy = false }
@@ -89,6 +100,7 @@
       <span class="mono grow">{running.run_id}</span>
       <span class="dim">{secs(running)}s</span>
       <button onclick={() => cancel(running.job_id)}>stop</button>
+      {#if running.demoSpeed}<span class="pill demo">{running.demoSpeed}x</span>{/if}
       {#if lastLine(running)}<span class="dim tail mono">{lastLine(running)}</span>{/if}
     </div>
   {/if}
@@ -112,6 +124,16 @@
         </label>
       {:else}
         <p class="dim">No practice legs under {practiceDir || 'datasets/practice'}.</p>
+      {/each}
+    </div>
+
+    <div class="row speeds">
+      <span class="dim">demo speed</span>
+      {#each DEMO_SPEEDS as s (s.v)}
+        <button class="speed" aria-pressed={demoSpeed === s.v} title="pace writes to draw live"
+                onclick={() => (demoSpeed = s.v)}>
+          {s.label}
+        </button>
       {/each}
     </div>
 
@@ -151,6 +173,10 @@
 
   .row { display: flex; gap: 6px; align-items: center; }
   .actions { justify-content: space-between; }
+  .speeds { font-size: 11px; }
+  .speed { padding: 2px 7px; font-size: 11px; }
+  .speed[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .pill.demo { color: var(--accent); border-color: var(--accent); }
 
   input {
     font: inherit; color: inherit; background: var(--panel-2);
