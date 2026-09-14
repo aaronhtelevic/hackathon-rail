@@ -33,6 +33,18 @@ rail network/stations).
   - Ground truth: 44 `good`, 2 `degraded` (ic2035), 4 `bad` (all ic536).
     The ic536 legs have the richest cell data but unusable ground truth.
 
+## Run viewer (`web/`)
+
+Svelte GUI + zero-dependency Node server that watch `work/runs/` and render a
+solve as it happens — per-leg status, `shape.json` segments and `anchors.json`
+candidates on one time axis, hydrated polyline over the anchor circles, the
+`events.ndjson` tail and `score.json`.
+
+Read-only by design: algorithms write files, the GUI only reads. Nothing in it
+is part of the submission pipeline, and the folder contract is exactly the
+`shape.json`/`anchors.json` contracts below — so the **I7** stub producers are
+enough to light the whole screen up. Full folder/file spec: `web/README.md`.
+
 ## Constraints
 
 - `meta.json` and `ground_truth.csv` are off-limits (labels/leakage) — must

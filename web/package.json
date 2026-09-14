@@ -1,0 +1,14 @@
+{
+  "name": "rail-gui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "install:all": "npm --prefix frontend install",
+    "dev": "node scripts/dev.mjs",
+    "server": "node server/server.mjs",
+    "build": "npm --prefix frontend run build",
+    "start": "npm run build && node server/server.mjs",
+    "demo": "node scripts/demo-run.mjs"
+  }
+}

@@ -1,2 +1,5 @@
 datasets
 starter_kit
+work/
+node_modules/
+dist/

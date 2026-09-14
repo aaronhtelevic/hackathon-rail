@@ -1,0 +1,11 @@
+{
+  "name": "rail-gui-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Read-only HTTP/SSE server over the algorithm run directory.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  }
+}
