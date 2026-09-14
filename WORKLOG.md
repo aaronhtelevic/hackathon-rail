@@ -165,7 +165,7 @@ warm track — one exact anchor, small radius, weight 1.
 | Side | Owns | Produces / consumes |
 |------|------|---------------------|
 | Motion | leg loader, orientation recovery, turn segmentation, stationary detector, speed prior, stop detection | writes `shape.json` |
-| Absolute | track model, OSM stitch + curvature signatures, cell join, wifi, GTFS candidate trips, name matching, local scorer, batch runner + submission writer | writes `anchors.json` |
+| Absolute | track model, OSM stitch + curvature signatures, cell join, wifi, GTFS candidate trips, name matching, `scorer/` harness, batch runner + submission writer | writes `anchors.json` |
 | Joint | **hydration and fusion** | reads both |
 
 Hydration is deliberately not split. It is where the idea actually lives and

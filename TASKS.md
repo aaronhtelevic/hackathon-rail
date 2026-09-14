@@ -17,8 +17,12 @@ Status key: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DROPPED`
 
 Recon phase complete; **nothing implemented yet**. Schema documented
 (`DATA_SCHEMA.md`), per-leg coverage survey done (§11), approach sketched in
-`WORKLOG.md` → Algorithm. Next real work is Phase 1 — I1/I2/I3 block
+`WORKLOG.md` → Algorithm. Next real work is Phase 1 — I7/I1/I2 block
 everything downstream.
+
+The organizers' scorer landed in `scorer/` — S3 unblocked, all tolerances now
+exact, and metric #6 turned out to mean something different than assumed
+(§1). `I3` shrank to a wrapper; `T1–T6` were rescoped.
 
 **The finding that most shapes the plan: 24 of 50 practice legs have zero
 cell samples** (§11). Cell-based positioning can't be the backbone.
@@ -72,10 +76,18 @@ unknown is mostly *distance along track*, not free-space position.
   754,730 stop_times, valid 2026-07-03..2026-12-12.
 - `reference_data/celltower/flanders_cells.csv` — 39,006 OpenCelliD rows.
 - `starter_kit/baseline_solve.py` — deliberately weak working example.
+- `scorer/` — **the organizers' real scorer** (`scorer.py` + `metrics.py`),
+  plus `scorer/polylines/<leg_id>.json` (true route geometry + `routeLengthM`
+  for all 50 practice legs). Run:
+  `python scorer/scorer.py --leg-id <leg_id> --track cold|warm --submission-dir <dir>`
 
-**Outputs per leg**: `position.csv` (`epochMillis, distanceAlongTrackM[,
-routeGuess]`) and `station_calls.csv` (`epochMillis, stationNameGuess`).
+**Outputs per leg**: `position.csv` (`epochMillis` + **either**
+`distanceAlongTrackM` **or** `latitude,longitude`, optional `routeGuess`) and
+`station_calls.csv` (`epochMillis, stationNameGuess`).
 Layout: `<team_name>/<cold|warm>/<leg_id>/position.csv`
+
+Each leg is **one hop** — a single `stationFrom` → `stationTo` pair (see
+`meta.json`). There is no multi-station sequence inside a leg.
 
 **Two independent leaderboards**: *warm start* (start station + coords + time
 given, route unknown) and *cold start* (nothing given). Not averaged.
@@ -83,21 +95,37 @@ Entering both is optional.
 
 ### Scoring dimensions
 
+Read from `scorer/metrics.py` — these are the organizers' exact rules, not
+inferences.
+
 | # | Dimension | Track | Notes |
 |---|-----------|-------|-------|
-| 1 | Trip/route discovery | both | Open guess vs GTFS. **Final** value scores. |
-| 2 | Speed of discovery | both | Scores the **earliest row after which the guess never changes**. Flip-flopping kills it. |
-| 3 | Position accuracy | both | The core metric (median/mean/max error in m). |
-| 4 | Time to first fix | cold | First estimate within 1 km. |
-| 5 | First-fix accuracy | cold | Separate from #4. |
-| 6 | Station-arrival detection | both | Right name, ±90 s of real arrival. Plus a one-shot 500 m-out prediction. |
+| 1 | Trip/route discovery | both | `routeGuess` vs `meta.lineName` (e.g. `ic4112`). **Last non-null row** scores. Compared after lowercase + `-`/`_`→space + whitespace collapse, then **exact equality**. |
+| 2 | Speed of discovery | both | `lockInTimeS` = earliest row after which the guess never changes. **Only computed if the final guess is correct**, so a wrong final guess scores nothing here. |
+| 3 | Position accuracy | both | median/mean/max \|error\| along track, over rows where GT is defined. |
+| 4 | Time to first fix | cold | First row within **1000 m**. Warm gets `"not applicable"`. |
+| 5 | First-fix accuracy | cold | Error at that first qualifying row. |
+| 6 | Station detection | both | **Not arrival detection.** Reference moment = when GT crosses `routeLengthM − 500 m`. Only the **first** call chronologically is scored, ±**90 s**. Name match is substring, either direction. |
+
+Consequences worth internalizing:
+- Rows where GT is undefined (tunnel gaps >60 s) are **skipped, not
+  penalised** — emit densely, there's no cost to covering a gap.
+- Metric #6 is a *one-shot 500 m-out prediction of the leg's destination*.
+  Nothing scores actually detecting the arrival, and extra calls are ignored
+  (`nCallsInLeg` is reported but unscored).
+- Submitting `latitude,longitude` instead of `distanceAlongTrackM` makes the
+  scorer project onto the leg's polyline itself (`scorer/scorer.py` →
+  `project_lonlat_to_distance`). See **X7** — this may remove the need to
+  pick an OSM route at all.
 
 ### Rules / constraints
 
 - OSM + GTFS + celltower CSV: use freely.
-- `meta.json` and `ground_truth.csv` are **off-limits as algorithm inputs** —
-  they're labels. Dev-time measurement/calibration only, and never one leg's
-  truth as input to another scored leg.
+- `meta.json`, `ground_truth.csv` and **`scorer/polylines/`** are off-limits
+  as algorithm inputs — they're labels. The polylines are the true route
+  geometry per practice leg; using them would be self-scoring. Dev-time
+  measurement/calibration only, and never one leg's truth as input to
+  another scored leg.
 - Any language/toolchain; submission is plain CSV.
 - The baseline cheats by reading `lineName`/`stationTo` from `meta.json`.
   Those fields won't exist on scoring legs.
@@ -117,7 +145,8 @@ Entering both is optional.
 |----|------|-----|--------|-------|
 | S1 | Python env with pandas/numpy (+ shapely/scipy) | J | TODO | |
 | S2 | Run `baseline_solve.py` on one practice leg end-to-end | A | TODO | |
-| S3 | Locate/obtain the scorer (`src/scoring/scorer.py`) | A | BLOCKED | Referenced by both READMEs, **not in this repo**. Ask organizers or reimplement (→ I3). |
+| S3 | Locate/obtain the scorer | A | DONE | It's `scorer/` — organizers' real logic, not a reimplementation. Tolerances now known exactly (§1); I3 drops to a thin wrapper. |
+| S8 | Read `scorer/metrics.py` and confirm every task's assumed metric matches | A | DONE | Metric #6 turned out to be a 500 m-out prediction, not arrival detection → rescoped T1–T6. |
 | S4 | Dump `sensors.db` schema + sample rates | — | DONE | → `DATA_SCHEMA.md`. Accel **and** gyro ~493 Hz, identical row counts per leg. |
 | S5 | Inventory all 50 legs: duration, length, GT quality, cell/wifi coverage | — | DONE | → §11. |
 | S6 | Inspect GTFS sqlite schema | — | DONE | → `DATA_SCHEMA.md`. Train number in `trips.trip_short_name`; `calendar_dates` authoritative. |
@@ -130,7 +159,7 @@ Entering both is optional.
 | I7 | **Freeze the two data contracts + commit stub producers** | J | TODO | Do this first — 30 min. `shape.json` + `anchors.json` per `WORKLOG.md` → Data contracts. Stubs let both lanes start immediately. |
 | I1 | Leg loader: `sensors.db` + `meta.json` → dataframes on a common time grid | M | TODO | Pick the resample rate: 493 Hz × 1800 s ≈ 900k rows/leg/sensor. |
 | I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | TODO | Network is **~203 disconnected components**; stitch at way endpoints. |
-| I3 | Local scorer replicating the 6 metrics over all practice legs | A | TODO | Shape known from `starter_kit/example_scorer_output.json`. Exact tolerances blocked on S3. |
+| I3 | Wrapper around `scorer/scorer.py` — import `score_leg()` directly, don't shell out per leg | A | TODO | Was "reimplement the scorer"; the real one is in `scorer/`. Just aggregation now. |
 | I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | A | TODO | |
 | I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | TODO | |
 | I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | A | TODO | Use `stops.stop_name_nl`; handle bilingual Brussels + 2 unnamed OSM stations. Needed by R2/R3, T3. |
@@ -192,24 +221,27 @@ block; `R*` is that lane's endgame work.
 | P2 | Resolve the cellId join ambiguity | A | TODO | We have only `cellId`, no LAC/TAC; OpenCelliD's key is `(radio,mcc,net,area,cell)`. Several candidate towers → the `candidates` list in `anchors.json`. `networkType=NR` has no match at all. |
 | P3 | WiFi AP fingerprinting — do BSSIDs recur across legs/stations? | A | TODO | Low expectations (as few as 1 distinct BSSID on a leg). Bonus signal. |
 | R1 | Candidate trip generation: date → `calendar_dates` → active trips + stop patterns | A | TODO | Filter by coarse position + time of day. |
-| R2 | Eliminate candidates as the leg progresses: turn sequence, stop pattern, inter-stop timing, direction | A | TODO | `WORKLOG.md` step 4. `shape.json`'s turn sequence is a strong discriminator — use it, not just timing. |
-| R3 | Inter-station timing model — must not treat a signal stop as a station | A | TODO | Pairs with T1. |
-| R4 | Lock-in policy — commit early, then **never change** | A | TODO | Metric #2 scores the last change, not the first correct guess. |
-| R5 | Fallback guess when confidence stays low | A | TODO | Open question: does blank `routeGuess` beat wrong? (§10) |
-| R6 | Format the guess: `route_short_name` + `trip_short_name` → e.g. `IC830` | A | TODO | Confirm casing/spacing against the scorer. Leg ids use `ic830`. |
+| R2 | Eliminate candidates as the leg progresses: turn sequence, leg duration, direction, start/end spacing | A | TODO | `WORKLOG.md` step 4. A leg is **one hop**, so there is no in-leg stop pattern to observe — `shape.json`'s turn sequence and the hop's length/duration do the discriminating. |
+| R3 | Match the leg's duration + endpoints against GTFS consecutive `stop_times` pairs | A | TODO | Replaces the multi-stop timing model. A ~252 s / 3.3 km hop narrows candidates hard. |
+| R4 | Lock-in policy — commit early, then **never change** | A | TODO | Metric #2 only pays out **if the final guess is correct**; a wrong final guess scores zero on both #1 and #2. |
+| R5 | Fallback guess when confidence stays low | A | TODO | Scorer treats null and wrong identically (`correct: false`, `lockInTimeS: null`), so a wrong guess costs nothing vs. blank — **always guess**. Resolved; keep the task for choosing *which* fallback. |
+| R6 | Format the guess as `meta.lineName` — lowercase line id, e.g. `ic4112`, `l1679`, `s51_785` | A | TODO | Resolved from `scorer/scorer.py`: truth is `meta["lineName"]`, which equals the leg-id prefix. No trip number, no `IC` prefix; case/dashes are normalised away anyway. |
 
-## 8. Phase 6 — Station detection (metric #6)
+## 8. Phase 6 — The 500 m-out call (metric #6)
 
-Motion lane's endgame work — it already owns the stationary detector.
+Rescoped after reading `scorer/metrics.py`. The metric is **one prediction per
+leg**: name the destination, timed within ±90 s of the moment the train is
+500 m from the leg's end. Only the first row of `station_calls.csv` counts.
+Motion lane's endgame work.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| T1 | Stop detector: M2 stops + **dwell duration** to reject signal stops | M | TODO | Baseline's known failure mode. |
-| T2 | Cross-check candidate stops against our position (N3) vs the OSM station list | M | TODO | |
-| T3 | Name the arrival from `belgium_rail_stations.geojson` (never `meta.json`) | M | TODO | 717 points = 458 `station` + 259 `halt`. Depends on I6 (A). |
-| T4 | Use GTFS dwell/stop patterns as a prior on which candidate is real | M | TODO | `pickup_type='1'` = pass-through, not a call. |
-| T5 | 500 m-out arrival prediction — fire exactly once per arrival | M | TODO | Submission channel unclear (§10). |
-| T6 | Validate timing error within ±90 s across practice legs | M | TODO | |
+| T1 | Predict the 500 m-out moment: `remaining_distance ≤ 500 m` off our own position estimate | M | TODO | This is a *distance* problem, not a stop-detection one — it fires **before** arrival, while still moving. |
+| T2 | Estimate leg length so "remaining" is computable without `routeLengthM` | M | TODO | `routeLengthM` is in `meta.json` = label. Must come from the matched route (N3) or GTFS stop spacing (N5). **The crux of this metric.** |
+| T3 | Name the destination: identify `stationTo` from route + direction | M | TODO | Scorer's name match is substring either direction, so close is good enough. Needs I6 (A) for NL/FR. |
+| T4 | Emit exactly one row, at the best single moment | M | TODO | Extra calls are ignored, not penalised — but only the *first* is scored, so an early wrong call wastes the leg. |
+| T5 | Validate against the scorer across practice legs | M | TODO | `stationDetection.timingErrorS` per leg. |
+| T6 | Decide whether stop/dwell detection is still worth building | M | TODO | Nothing in the 6 metrics scores it. It may still help R3 timing and H3 — but it is no longer a deliverable of its own. |
 
 ## 9. Phase 7 — Tracks, first fix, and the final round
 
@@ -239,6 +271,7 @@ Motion lane's endgame work — it already owns the stationary detector.
 | X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | TODO | |
 | X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | TODO | |
 | X6 | Verify graceful degradation on a **cell-less** leg | M | TODO | Nearly half the data. Exercises H7 — shape-only path must still emit. |
+| X7 | **Ask Steven: will scoring legs come with polylines?** | A | TODO | If yes, submit `latitude,longitude` and let the scorer project — N2/N3 route-picking becomes optional. Ask early; it changes the plan. |
 
 ---
 
@@ -252,14 +285,19 @@ Motion lane's endgame work — it already owns the stationary detector.
 | | Lane owners: motion = **TBD**, absolute = **TBD** | Two engineers, two lanes (§0). Put real names here so `Own` column is unambiguous. |
 | 2026-09-14 | Cut the pipeline at `shape.json` + `anchors.json` | Only clean seam between the two lanes; lets each side work against a stub of the other. Contracts in `WORKLOG.md`. |
 
-Open:
-- Where is `src/scoring/scorer.py`? Referenced by both READMEs, absent here
-  (**S3**). Without it there's no local feedback loop.
-- Exact scorer tolerances beyond ±90 s (station) and 1 km (first fix).
-- Expected `routeGuess` string format — `IC830`? `830`? (**R6**)
-- Does a blank `routeGuess` score better or worse than a wrong one? (**R5**)
-- Is the 500 m-out prediction submitted via `station_calls.csv` or a separate
-  channel? The brief mentions it; the format docs don't. (**T5**)
+Resolved by `scorer/` (2026-09-14):
+- ~~Where is the scorer?~~ → `scorer/`, the organizers' own code.
+- ~~Exact tolerances?~~ → `metrics.py`: 60 s max interp gap, 90 s station
+  window, 1000 m first-fix threshold, 500 m approach distance.
+- ~~`routeGuess` format?~~ → `meta.lineName`, e.g. `ic4112` (**R6**).
+- ~~Blank vs wrong `routeGuess`?~~ → scored identically, so always guess (**R5**).
+- ~~500 m-out submission channel?~~ → `station_calls.csv`; it *is* metric #6,
+  and only the first row counts.
+
+Still open:
+- **Do scoring legs ship a polyline?** Decides whether we can submit
+  `latitude,longitude` and let the organizers project (**X7**). This is the
+  single highest-leverage unknown left — it could remove N2/N3 entirely.
 - Will scoring legs also have cell gaps, in the same ride-wide pattern?
 - Are scoring legs contiguous within a ride? Practice legs are **not** —
   `ic830` has 00,01,02,04,05,06; no 03.
@@ -300,9 +338,14 @@ ends.
 
 - Baseline position error (constant-speed interpolation): median **974 m**.
   That's the bar to beat.
-- Baseline's known failure: stop detector fired **275 s early** on a
-  non-station slowdown → `detected: false` despite a correct name. Dwell
-  duration + position cross-check is the fix (**T1/T2**).
+- Baseline's known failure: its station call landed **275 s** off →
+  `detected: false` despite a correct name. Now explainable: the reference
+  moment is 500 m before the leg's end, not the arrival, so a dwell-based
+  detector is aiming at the wrong instant entirely (**T1/T2**).
+- Scorer tolerances live in `scorer/metrics.py` as module constants —
+  `MAX_INTERP_GAP_S`, `STATION_CALL_TOLERANCE_S`,
+  `FIRST_FIX_ACCURACY_THRESHOLD_M`, `STATION_APPROACH_DISTANCE_M`. Read them
+  rather than hardcoding our own copies.
 - Ground truth has *gaps* (tunnels) for >60 s GPS outages; rows with
   `isInterpolated=true` are filled small (<60 s) gaps.
 - `calendar_dates` — not `calendar` — is authoritative for whether a service
