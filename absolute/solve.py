@@ -43,18 +43,64 @@ class WarmStart:
 
 
 WARM_KEYS = ("stationFrom", "coordFrom", "tFromEpochMillis")
+# The scoring release is built by the same dataset builder as practice, so the warm fields
+# almost certainly keep these names (Steven unreachable — assumption recorded in TASKS.md §10).
+# Cheap insurance against a rename or a partial hand-over: aliases, and each missing piece
+# derived from the others (coords from the station registry, station from the nearest to
+# the coords, t0 from the first sensor sample, ISO time strings).
+_ALIASES = {
+    "stationFrom": ("stationFrom", "startStation", "station_from", "fromStation", "originStation", "stationName"),
+    "coordFrom": ("coordFrom", "startCoord", "coord_from", "fromCoord", "startCoordinates", "coord"),
+    "tFromEpochMillis": ("tFromEpochMillis", "startEpochMillis", "t_from_epoch_millis", "tFrom", "epochMillisFrom", "startTimeMs"),
+}
+_ISO_KEYS = ("tFromISO", "startISO", "tFrom", "startTime")
+_LABEL_KEYS = ("lineName", "stationTo", "coordTo", "routeLengthM", "tToEpochMillis", "direction")
+
+
+def _pick(m: dict, key: str):
+    return next((m[k] for k in _ALIASES[key] if k in m and m[k] not in (None, "")), None)
+
+
+def _lonlat(c) -> tuple[float, float] | None:
+    if isinstance(c, dict):
+        lon = c.get("lon", c.get("longitude")); lat = c.get("lat", c.get("latitude"))
+        return (float(lon), float(lat)) if lon is not None and lat is not None else None
+    if isinstance(c, (list, tuple)) and len(c) == 2:
+        a, b = float(c[0]), float(c[1])
+        return (b, a) if a > 49.0 and b < 7.0 else (a, b)   # [lat, lon] given? Belgium: lat ~50-51, lon ~2.5-6.5
+    return None
 
 
 def warm_from_meta(leg_id: str) -> WarmStart | None:
-    """Only the fields the warm track gives you (WARM_KEYS) — nothing else in meta.json is read.
-    None when the file or any of the three fields is missing (cold-only leg)."""
+    """Only the warm-track fields (station name, coordinates, start time) are read from meta.json.
+    None when the file is missing or nothing usable is in it (cold-only leg)."""
     f = paths.leg_dir(leg_id) / "meta.json"
     if not f.exists():
         return None
     m = json.loads(f.read_text(encoding="utf-8"))
-    if not all(k in m for k in WARM_KEYS):
+    name = _pick(m, "stationFrom")
+    ll = _lonlat(_pick(m, "coordFrom"))
+    t0 = _pick(m, "tFromEpochMillis")
+    if t0 is None:
+        iso = next((m[k] for k in _ISO_KEYS if isinstance(m.get(k), str)), None)
+        if iso:
+            import datetime as dt
+            t0 = int(dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1000)
+    if isinstance(t0, str) and t0.isdigit():
+        t0 = int(t0)
+    if name is None and ll is None:
         return None
-    return WarmStart(m["stationFrom"], m["coordFrom"][0], m["coordFrom"][1], int(m["tFromEpochMillis"]))
+    reg = load_stations()
+    if ll is None:
+        st = reg.by_name(str(name))
+        if st is None:
+            return None
+        ll = (st.lon, st.lat)
+    if name is None:
+        name = reg.nearest(*ll)[0][0].name
+    if t0 is None:
+        t0 = sensor_span_ms(leg_id)[0]
+    return WarmStart(str(name), ll[0], ll[1], int(t0))
 
 
 def sensor_span_ms(leg_id: str) -> tuple[int, int]:

@@ -342,11 +342,13 @@ calls. `scripts/run_scoring.py --dataset … --out … [--score]` runs both trac
 | X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | DONE | `run_scoring.py::validate`: columns, ≥2 rows, no NaN, monotonic time, lat/lon inside Belgium, routeGuess non-empty, ≤1 station call. A failing folder is deleted, never shipped; `run_report.csv` lists every leg's outcome. |
 | X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | READY | Output already in `<out>/<team>/<cold|warm>/<leg_id>/` — zip `work/final/televic` and send over Teams. Team name defaults to `televic` (`--team`). |
 | X6 | Verify graceful degradation on a **cell-less** leg | M | DONE | All 24 cell-less legs solve and score through the absolute path (empty anchors, schedule-only timing). |
-| X7 | **Ask Steven: will scoring legs come with polylines?** | A | OPEN | **Still to ask Steven** (also: does the scoring release's `meta.json` carry the warm fields under the same names, and are the leg folder names label-free?). Moot for our output either way — we submit lat/lon, and the organizers need polylines to score at all. |
+| X7 | **Ask Steven: will scoring legs come with polylines?** | A | DECIDED | No answer from Steven by 14h; assumptions taken (§10, 2026-09-14): (1) scoring `meta.json` comes from the same dataset builder with the label fields withheld, so `stationFrom`/`coordFrom`/`tFromEpochMillis` keep their names — `solve.warm_from_meta` now also accepts aliases, `[lat,lon]` order, `{lat,lon}` dicts, ISO time, and derives a missing coord/name/t0 (tested on 6 variants); (2) folder names stay as handed over — we never read them; (3) polylines exist organizer-side — we submit lat/lon regardless. |
 
 ---
 
 ## 10. Decisions & open questions
+
+| 2026-09-14 14h | X7 unanswered → proceed on assumptions | Scoring `meta.json` = practice format minus labels (same builder, `assign_bucket`); warm reader hardened against renames/partial fields anyway. Folder names copied verbatim, never parsed. Polylines are the organizers' problem since we submit lat/lon. If the release differs at 16h00: `run_scoring.py` prints `skipped: no warm fields` per leg — then the cold path still runs, and a 5-line alias addition in `solve._ALIASES` is the fix. |
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
