@@ -7,6 +7,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -15,8 +16,27 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..')
 const PORT = Number(process.env.RAIL_GUI_PORT ?? 5174)
 const RUNS_DIR = path.resolve(process.env.RAIL_RUNS_DIR ?? path.join(REPO_ROOT, 'work', 'runs'))
 const STATIC_DIR = path.join(__dirname, '..', 'frontend', 'dist')
+const OSM_DIR = path.resolve(process.env.RAIL_OSM_DIR ?? path.join(REPO_ROOT, 'datasets', 'reference_data', 'osm'))
 const POLL_MS = Number(process.env.RAIL_GUI_POLL_MS ?? 500)
 const MAX_FILE_BYTES = 8 * 1024 * 1024
+
+// OSM layers are big, static, read-only reference data — read once, gzip once, keep in memory.
+const OSM_FILES = {
+  'rail-network': 'belgium_rail_network.geojson',
+  'rail-stations': 'belgium_rail_stations.geojson',
+}
+const osmCache = new Map() // layer -> { raw: Buffer, gz: Buffer }
+
+async function loadOsmLayer (layer) {
+  if (osmCache.has(layer)) return osmCache.get(layer)
+  const name = OSM_FILES[layer]
+  if (!name) return null
+  const raw = await fsp.readFile(path.join(OSM_DIR, name))
+  const gz = zlib.gzipSync(raw)
+  const entry = { raw, gz }
+  osmCache.set(layer, entry)
+  return entry
+}
 
 fs.mkdirSync(RUNS_DIR, { recursive: true })
 
@@ -192,6 +212,20 @@ async function handleApi (req, res, url) {
     const ping = setInterval(() => { try { res.write(': ping\n\n') } catch { /* closed */ } }, 20000)
     req.on('close', () => { clearInterval(ping); sseClients.delete(res) })
     return
+  }
+
+  // GET /api/osm/:layer  — rail-network | rail-stations (static reference GeoJSON)
+  if (seg.length === 3 && seg[1] === 'osm') {
+    const entry = await loadOsmLayer(seg[2])
+    if (!entry) return sendJson(res, 404, { error: 'no such osm layer', layer: seg[2] })
+    const acceptsGzip = (req.headers['accept-encoding'] ?? '').includes('gzip')
+    const headers = { 'content-type': 'application/geo+json; charset=utf-8', 'cache-control': 'public, max-age=3600' }
+    if (acceptsGzip) {
+      res.writeHead(200, { ...headers, 'content-encoding': 'gzip', 'content-length': entry.gz.length })
+      return res.end(entry.gz)
+    }
+    res.writeHead(200, { ...headers, 'content-length': entry.raw.length })
+    return res.end(entry.raw)
   }
 
   // GET /api/runs

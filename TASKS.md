@@ -15,11 +15,12 @@ Status key: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DROPPED`
 
 ## 0. Where we are
 
-**Absolute lane has an end-to-end warm-start solver** (`absolute/`, run with
-`.venv/bin/python scripts/run_warm.py`). No IMU used yet — GTFS picks the
-train and destination, OSM gives the path, a schedule-timed trapezoid gives
-position, and the 500 m-out call falls out of the same profile. Scores on
-the 50 practice legs (44 good-GT):
+**Both lanes are implemented end-to-end and independent.**
+
+*Absolute* (`absolute/`, run with `.venv/bin/python scripts/run_warm.py`):
+no IMU used — GTFS picks the train and destination, OSM gives the path, a
+schedule-timed trapezoid gives position, and the 500 m-out call falls out of
+the same profile. Scores on the 50 practice legs (44 good-GT):
 
 | metric | baseline (`ic830_00` only) | absolute-only, all legs |
 |---|---|---|
@@ -32,11 +33,19 @@ same-destination/same-hop pairs nothing in this leg can separate
 (`ic2035`/`s33 2963`, `ic536`/`s2 3785`, `ic3033`/`ic2633`), 3 are
 opposite-direction pairs on **cell-less** legs (`ic2809_03`, `l1679_02`,
 `ic4112_00`) that need the motion lane's initial heading; (2) the platform dwell
-at the start of every leg — timing is a schedule prior, the motion lane's
-`shape.json` `moving` flags replace it as soon as they exist (already wired in
-`solve.py::motion_window`); (3) four hairpin routes in OSM (N1).
+at the start of every leg — timing is a schedule prior, and the motion lane's
+`shape.json` `moving` flags now exist to replace it (`solve.py::motion_window`
+is already wired for them, but nothing feeds it yet); (3) four hairpin routes
+in OSM (N1).
 
-Motion lane: see M/O/H2 rows. Hydration (H3–H7) not started.
+*Motion* (`motion/shape_stream.py`, causal, stdlib-only, ~200x realtime, plus
+`motion/validate_shape.py`): Phase 2 + the H2 speed prior. Turn topology is
+solid (net heading error median 10 deg); the length prior is weak (median 39 %)
+— see `WORKLOG.md` → Motion lane. Task detail in the M/O/H2 rows.
+
+**The two do not talk to each other yet.** Phase 3 (hydration, §5) is the next
+real work: it is what turns the shape into scale-correct position and what
+lets cell anchors re-rank the GTFS shortlist. Hydration (H3–H7) not started.
 
 **Decision taken (A):** we submit **`latitude,longitude`**, not
 `distanceAlongTrackM`. The scorer projects onto its own polyline, so we never
@@ -176,7 +185,7 @@ Consequences worth internalizing:
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| I7 | **Freeze the two data contracts + commit stub producers** | J | DONE | anchors side is the real producer (`absolute/anchors.py`), written to `work/<leg>/anchors.json` by the warm solver. `shape.json` is read opportunistically by `absolute/solve.py::motion_window` — the motion lane owns writing it. |
+| I7 | **Freeze the two data contracts + commit stub producers** | J | DONE | anchors side is the real producer (`absolute/anchors.py`), written to `work/<leg>/anchors.json` by the warm solver. `shape.json` is read opportunistically by `absolute/solve.py::motion_window` — `motion/shape_stream.py` now writes it for real, so both contracts have real producers. |
 | I1 | Leg loader: `sensors.db` + `meta.json` → dataframes on a common time grid | M | TODO | Pick the resample rate: 493 Hz × 1800 s ≈ 900k rows/leg/sensor. |
 | I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | DONE | `absolute/track.py`. 250k nodes / 257k edges; stitching at ≤8 m collapses 203 → **48** components, largest 249k nodes. 23/50 legs within 2 % of true length; the rest → N1. |
 | I3 | Wrapper around `scorer/scorer.py` — import `score_leg()` directly, don't shell out per leg | A | DONE | `absolute/harness.py` — imports `scorer.score_leg`, flattens to one row per leg, prints a summary. |
@@ -192,12 +201,12 @@ depends on cell/wifi, so this lane never waits on the other.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | M | TODO | Device pose is unknown and arbitrary. Hardest unknown in the project; everything in this phase depends on it. |
-| O2 | Handle orientation changes mid-leg (phone moved/picked up) | M | TODO | Detect and re-estimate rather than assume a fixed pose. Sets `orientation_ok`. |
-| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + signed `turn_deg` | M | TODO | The signal that carries the shape. |
-| M2 | Stationary detector: rolling accel variance → `moving` flag per segment | M | TODO | Feeds H2/H3 and T1. Stopped ≠ at station. |
-| M3 | Write `shape.json` to the frozen contract | M | TODO | Replaces the I7 stub. Keep the stub's schema exactly. |
-| M4 | Sanity-check shapes against GT track geometry on `good` legs | M | TODO | Eyeball turn count/order vs real route before trusting hydration. |
+| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | M | DONE | `motion/shape_stream.py`. Turns need only the **up** axis (`yaw = -dot(gyro,up)`), so O1 never gated M1. Gravity EMA must be slow (tau 60 s) or it eats the train's own acceleration. Lateral/forward axes come from the yaw-rate regression. |
+| O2 | Handle orientation changes mid-leg (phone moved/picked up) | M | DONE | Tilt of the gravity EMA vs a reference >15° → `orientation_ok=false`, axes re-estimated, confidences halved. 0 pose changes on all 50 practice legs. |
+| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + signed `turn_deg` | M | DONE | Hysteresis state machine (enter 0.52 °/s, exit 0.26 °/s, min 2.5 s / 2.5°). Net heading error vs true polylines: **median 10°, p90 37°** over 44 good legs. |
+| M2 | Stationary detector: rolling accel variance → `moving` flag per segment | M | DONE | High-pass accel RMS over a 2 s trailing window + gyro RMS, gate = max(0.085, 1.8 × running quiet floor), 2.5 s hysteresis. |
+| M3 | Write `shape.json` to the frozen contract | M | DONE | `motion/shape_stream.py` → `work/<leg_id>/shape.json` (+ `shape_trace.csv`, `shape.svg`, `shape_stream.jsonl`). One extra field: `speed_source`. Also writes a `work/runs/<run_id>/` copy + live `events.ndjson` for the `web/` viewer (`--no-gui` opts out). |
+| M4 | Sanity-check shapes against GT track geometry on `good` legs | M | DONE | `motion/validate_shape.py` (dev-only). Turn order/heading match well; **length** does not (see H2). Note: `scorer/polylines` chunks sometimes run backwards — reversals >90° are ordering artifacts, not turns. |
 
 ## 5. Phase 3 — Shape hydration (`WORKLOG.md` step 3) — new core
 
@@ -212,7 +221,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
 | H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | DONE | `absolute/anchors.py`. 10 s bins, multi-candidate. On `ic536_02`: 108 anchors, 87 % contain the true position within radius, centroid error median 931 m — cell is coarse. |
-| H2 | Segment length prior from IMU: speed estimate (accel integration w/ drift control and/or vibration energy → speed regression) | M | TODO | Fills `speed_prior_mps`/`length_prior_m` in `shape.json`. A prior the anchors correct — not the answer. |
+| H2 | Segment length prior from IMU: speed estimate | M | DONE (weak) | Accel integration and vibration energy both **fail** (see `WORKLOG.md` → Motion lane). What works: `v = a_lat/omega` in curves + gyro-derived cant correction → median 39% speed error, **turns only**. Dead-reckoned leg length: median 39% error, p90 71%. Scale must come from anchors/GTFS. |
 | H3 | Stopped-vs-moving resolution per straight segment | J | TODO | M2's `moving` flag proposes, anchors ± radius confirm. Radius width gates confidence. |
 | H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | TODO | **Pair on this.** Start with least-squares / monotone fit before reaching for a particle filter. |
 | H5 | Per-segment confidence out of the solver | J | TODO | Feeds fusion weighting (N3) and the lock-in policy (R4). |

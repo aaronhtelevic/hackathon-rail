@@ -214,6 +214,7 @@ bytes after its cursor.
 | `GET /api/runs/:run/legs/:leg` | status, shape, anchors, hydrated, score |
 | `GET /api/runs/:run/legs/:leg/events?cursor=N` | events after byte `N`, plus the next cursor |
 | `GET /api/runs/:run/legs/:leg/file/:name` | raw file (CSV download links) |
+| `GET /api/osm/:layer` | static reference GeoJSON — `rail-network` or `rail-stations`, read + gzipped once, cached in memory |
 | `GET /api/events` | SSE change stream |
 
 Non-GET is refused, every client path is resolved and confined to the runs dir,
