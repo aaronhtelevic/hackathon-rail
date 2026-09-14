@@ -359,7 +359,48 @@ Code: `absolute/hydrate.py`, called from `absolute/solve.py::solve_warm` and
   43 scoreable correct-route practice legs the signed timing error is median
   −1.5 s, p90 43 s, against a ±90 s tolerance — no bias to correct, and our
   OSM `L` is only ~110 m short of the organizers' route length. The remaining
-  misses are unscoreable (reference moment inside a GT gap) or a wrong route.
+  misses are unscoreable (ground truth truncates before the reference moment)
+  or a wrong route — see "Station-call misses" below for the breakdown.
+
+## Station-call misses — diagnosis (2026-09-14)
+
+7/50 practice legs miss the station call. Investigated each individually:
+
+- **5 are unscoreable for anyone**, not a bug on our side: `ground_truth.csv`
+  stops recording before the train ever gets within 500 m of the destination
+  — e.g. `ic2933_04` (a 2 km leg) has its last GT fix at 27 % of the route,
+  `ic2809_04` at 78 % with 225 s of sensor data still to come. This is a
+  *trailing* GPS loss right before arrival, clustered at large/urban stations
+  (Antwerpen-Berchem, the Brussel-Zuid throat, Linkeroever, Brussels-Airport)
+  — plausibly platform canopies/urban canyon, not the mid-leg tunnel gaps the
+  metric's `MAX_INTERP_GAP_S` is built for. `metrics.find_time_at_distance`
+  returns `None` whenever the target distance is beyond the last GT point, so
+  `referenceTimeMs` is `None` and no submission — ours or anyone else's — can
+  score these. No fix exists; noted here so it isn't mistaken for our bug when
+  the blind set shows the same pattern (large/terminal stations especially).
+- **1 is the same-minute wrong-route pick** (`ic2809_04`): our destination
+  name is wrong (`Brussel-Zuid` vs true `Brussels-Airport`), so the name check
+  fails regardless of timing. Root cause is N5/R3 — two real trains from the
+  same platform to the same next stop inside one minute — not a Phase 6 issue.
+  The only signal that could separate them is `rollingStockId` in `meta.json`,
+  which we deliberately never read (would be a label leak, same class as
+  `lineName`) — this is a policy trade-off, not an oversight.
+- **1 is a real, scoreable timing miss**: `ic536_01` (Brussel-Centraal →
+  Brussel-Zuid, via the North-South junction tunnel), call 124 s late against
+  ±90 s. `groundTruthQuality: bad` on this leg, so the reference moment itself
+  is suspect too. Our hydrated curve runs late at *both* ends versus the
+  schedule (`schedule_check`: dep +112 s, arr +158 s — both far outside the
+  +72/+20 s typical), and the knot trace shows two long held-still stretches
+  (128 s at the start, ~35 s mid-leg) that the DP believes from the shape.
+  Whether that reflects a genuinely congested short urban hop or a shape
+  artefact from a busy junction is unresolved — not chased further given it
+  is one leg with untrustworthy ground truth to validate against anyway.
+
+**Where a real lever remains**: none, on the practice set — the 5 unscoreable
+legs have no possible fix, and the route/timing misses are each one-off. If
+the blind set repeats the trailing-GPS-loss pattern near big stations, it
+costs us the same way there; nothing to build differently for it.
+
 - **Not done**: `sigma_m` (H5) is written but nothing weights by it yet; the
   motion-lane dwell miss (`ic3013_03`) is best fixed at the source (M2), the
   schedule prior is a patch over it.
