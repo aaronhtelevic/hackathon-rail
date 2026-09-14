@@ -18,7 +18,7 @@
   <div class="grid">
     <div class="cell">
       <span class="k dim">route guess</span>
-      <span class="v">{route?.guess ?? '—'}</span>
+      <span class="v">{route?.finalGuess ?? route?.guess ?? '—'}</span>
       <span class="sub" class:ok={route?.correct} class:bad={route?.correct === false}>
         {route?.correct == null ? '' : route.correct ? 'correct' : 'wrong'}
         {route?.lockInTimeS != null ? ` · lock-in ${num(route.lockInTimeS, 0)}s` : ''}

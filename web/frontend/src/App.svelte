@@ -164,9 +164,9 @@
 
   <section class="detail scroll">
     {#if !selectedLeg}
-      <div class="panel"><p class="dim">Pick a leg.</p></div>
+      <div class="panel snap-section"><p class="dim">Pick a leg.</p></div>
     {:else}
-      <div class="panel">
+      <div class="panel snap-section">
         <h2>{selectedLeg} — {run?.meta?.algorithm ?? 'algorithm'}</h2>
         <p class="dim status-line">
           {leg?.status?.stage ?? 'no status.json'}
@@ -176,29 +176,30 @@
         <ScorePanel score={leg?.score} />
       </div>
 
-      <div class="panel">
-        <h2>Lane timeline</h2>
-        <LaneTimeline shape={leg?.shape} anchors={leg?.anchors} />
-      </div>
-
-      <div class="two">
+      <div class="snap-section geometry-group">
         <div class="panel">
           <h2>Geometry</h2>
-          <AnchorMap anchors={leg?.anchors} hydrated={leg?.hydrated} />
+          <AnchorMap anchors={leg?.anchors} hydrated={leg?.hydrated} shape={leg?.shape} legId={selectedLeg} />
         </div>
+
         <div class="panel">
-          <h2>Events</h2>
-          <EventLog {events} />
-          <p class="dim files">
-            {#each Object.entries(run?.legs?.find(l => l.leg_id === selectedLeg)?.files ?? {}) as [name, f] (name)}
-              <a href={fileUrl(selectedRun, selectedLeg, name)} target="_blank" rel="noreferrer">{name}</a>
-              <span class="dim">({(f.size / 1024).toFixed(1)} kB)</span>
-            {/each}
-          </p>
+          <h2>Lane timeline</h2>
+          <LaneTimeline shape={leg?.shape} anchors={leg?.anchors} />
         </div>
       </div>
 
-      <div class="panel">
+      <div class="panel snap-section">
+        <h2>Events</h2>
+        <EventLog {events} />
+        <p class="dim files">
+          {#each Object.entries(run?.legs?.find(l => l.leg_id === selectedLeg)?.files ?? {}) as [name, f] (name)}
+            <a href={fileUrl(selectedRun, selectedLeg, name)} target="_blank" rel="noreferrer">{name}</a>
+            <span class="dim">({(f.size / 1024).toFixed(1)} kB)</span>
+          {/each}
+        </p>
+      </div>
+
+      <div class="panel snap-section">
         <h2>Raw contracts</h2>
         <JsonBox label="shape.json" value={leg?.shape} />
         <JsonBox label="anchors.json" value={leg?.anchors} />
@@ -232,13 +233,13 @@
   .name { font-size: 12px; }
   .meta { font-size: 11px; display: flex; gap: 5px; align-items: center; }
 
-  .detail { display: flex; flex-direction: column; gap: 12px; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .detail { display: flex; flex-direction: column; gap: 12px; scroll-snap-type: y proximity; }
+  .snap-section { scroll-snap-align: start; scroll-margin-top: 0; }
+  .geometry-group { display: flex; flex-direction: column; gap: 12px; }
   .status-line { margin: 4px 0 10px; font-size: 12px; }
   .files { font-size: 11px; margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 
   @media (max-width: 900px) {
     main { grid-template-columns: 1fr; height: auto; }
-    .two { grid-template-columns: 1fr; }
   }
 </style>

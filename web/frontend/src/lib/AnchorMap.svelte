@@ -5,10 +5,11 @@
   import 'leaflet/dist/leaflet.css'
   import { getOsmLayer } from './api.js'
 
-  let { anchors = null, hydrated = null } = $props()
+  let { anchors = null, hydrated = null, shape = null, legId = null } = $props()
 
   const list = $derived(anchors?.anchors ?? [])
   const poly = $derived(hydrated?.polyline ?? [])
+  const segments = $derived(shape?.segments ?? [])
 
   let el
   let map
@@ -19,6 +20,32 @@
   let showStations = $state(false)
   let showCircles = $state(false)
   let osmError = $state(null)
+  let fittedLeg = null // leg_id we last fitBounds()'d for — avoids re-zooming on every live update
+  let fittedFix = false // whether that fit actually included the live estimate (blue dot), not just anchors
+
+  const turnIcon = label => L.divIcon({
+    className: 'turn-icon',
+    html: `<div class="turn-badge ${label === 'L' ? 'left' : 'right'}">${label}</div>`,
+    iconSize: [20, 20], iconAnchor: [10, 10],
+  })
+  const stopIcon = L.divIcon({
+    className: 'stop-icon',
+    html: '<div class="stop-badge">STOP</div>',
+    iconSize: [36, 20], iconAnchor: [18, 10],
+  })
+
+  // Nearest hydrated polyline point to a given timestamp — segments carry no lat/lon of their own.
+  function posAtTime (t) {
+    if (!poly.length || t == null) return null
+    let best = null; let bestDelta = Infinity
+    for (const p of poly) {
+      const pt = p.t ?? p.time
+      if (pt == null) continue
+      const d = Math.abs(pt - t)
+      if (d < bestDelta) { bestDelta = d; best = p }
+    }
+    return best ? [best.lat ?? best[0], best.lon ?? best[1]] : null
+  }
 
   onMount(() => {
     map = L.map(el, { attributionControl: true }).setView([50.85, 4.35], 8)
@@ -29,6 +56,12 @@
     layer = L.layerGroup().addTo(map)
     loadOsmLayers()
     draw()
+
+    // Layout/panel resizes (e.g. moving panels around) leave Leaflet's cached
+    // container size stale, which throws off zoom/pan math — keep it in sync.
+    const ro = new ResizeObserver(() => map.invalidateSize())
+    ro.observe(el)
+    onDestroy(() => ro.disconnect())
   })
 
   async function loadOsmLayers () {
@@ -91,27 +124,58 @@
           }).addTo(layer)
         }
         L.circleMarker(ll, {
-          radius: 3, color: '#0b0d12', weight: 1, fillColor: colorOf(a.source), fillOpacity: 1,
+          radius: a.source === 'warm_start' ? 8 : 3, color: '#0b0d12', weight: 1, fillColor: colorOf(a.source), fillOpacity: 1,
         }).bindTooltip(`${a.source} @ ${new Date(a.t).toLocaleTimeString()} · w=${c.weight ?? 1} · ±${c.radius_m ?? '?'} m`)
           .addTo(layer)
       }
     }
 
+    let liveFix = null
     if (poly.length > 1) {
       const line = poly.map(p => [p.lat ?? p[0], p.lon ?? p[1]])
       bounds.push(...line)
-      L.polyline(line, { color: 'var(--joint)', weight: 2, lineJoin: 'round' }).addTo(layer)
+      L.polyline(line, { color: 'var(--joint)', weight: 5, lineJoin: 'round' }).addTo(layer)
 
-      const last = line[line.length - 1]
-      L.circleMarker(last, {
-        radius: 7, color: '#fff', weight: 2, fillColor: '#1e6bff', fillOpacity: 1,
-      }).bindTooltip('estimated current location').addTo(layer)
+      liveFix = line[line.length - 1]
+      L.circleMarker(liveFix, {
+        radius: 8, color: '#fff', weight: 2, fillColor: '#1e6bff', fillOpacity: 1,
+      }).bindTooltip('estimated current location — live guess').addTo(layer)
     }
 
-    if (bounds.length) map.fitBounds(bounds, { padding: [26, 26] })
+    for (const seg of segments) {
+      if (seg.type === 'left' || seg.type === 'right') {
+        const pos = posAtTime(seg.t_start)
+        if (pos) {
+          bounds.push(pos)
+          L.marker(pos, { icon: turnIcon(seg.type === 'left' ? 'L' : 'R') })
+            .bindTooltip(`${seg.type} turn · ${seg.turn_deg ?? '?'}°`)
+            .addTo(layer)
+        }
+      }
+      if (seg.moving === false) {
+        const pos = posAtTime((seg.t_start + seg.t_end) / 2)
+        if (pos) {
+          bounds.push(pos)
+          L.marker(pos, { icon: stopIcon }).bindTooltip('stopped').addTo(layer)
+        }
+      }
+    }
+
+    if (legId !== fittedLeg) { fittedLeg = legId; fittedFix = false }
+    map.invalidateSize()
+
+    if (liveFix) {
+      // Always keep the live estimate centered — this is the thing the user is tracking.
+      const z = fittedFix ? map.getZoom() : 15
+      map.setView(liveFix, z, { animate: fittedFix })
+      fittedFix = true
+    } else if (bounds.length && !fittedFix) {
+      // No live fix yet (fresh run, still waiting on hydration) — frame what we have.
+      map.fitBounds(bounds, { padding: [40, 40] })
+    }
   }
 
-  $effect(() => { list; poly; draw() })
+  $effect(() => { list; poly; segments; draw() })
 </script>
 
 {#if !list.length && poly.length < 2}
@@ -131,9 +195,20 @@
 </p>
 
 <style>
-  .map { width: 100%; height: 320px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+  .map { width: 100%; height: 600px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
   .scalebar { font-size: 11px; margin: 6px 0 0; }
   .layers { display: flex; gap: 12px; align-items: center; font-size: 11px; margin: 0 0 6px; }
   .layers label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
   .err { color: var(--bad); }
+  :global(.turn-badge) {
+    width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #0b0d12; border: 2px solid #0b0d12;
+  }
+  :global(.turn-badge.left) { background: #6ea8fe; }
+  :global(.turn-badge.right) { background: #f0b866; }
+  :global(.stop-badge) {
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 20px; background: #d1483f; color: #fff; font-size: 9px; font-weight: 700;
+    border: 2px solid #fff; border-radius: 4px; letter-spacing: 0.5px;
+  }
 </style>
