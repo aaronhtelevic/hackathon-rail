@@ -42,6 +42,20 @@ The shape carries *every* leg (IMU is always present); cell/wifi only set the
 scale where they exist. That ordering is the point of the redesign — see
 `WORKLOG.md` steps 2–3.
 
+### Two engineers, two lanes
+
+Owner column: **M** = motion lane, **A** = absolute lane, **J** = joint (pair
+on it). The lanes meet at two files only — `shape.json` and `anchors.json`,
+specified in `WORKLOG.md` → Data contracts.
+
+1. **Both, first 30 min** — freeze the contracts, commit stub producers (**I7**).
+2. **Parallel** — M: `I1` → `O*` → `M*`. A: `I2` → `I3` → `P1 P2`. Each
+   validates against a stub of the other's file.
+3. **Converge** — real shape + real anchors meet in hydration. Pair on `H4`.
+4. **Parallel again** — M takes `T*` stations, A takes `R*` routes + `X*`.
+
+No shared file ownership: `I1` is M's alone, `I3` is A's alone.
+
 ---
 
 ## 1. Context (from `datasets/PARTICIPANT_BRIEF.md`)
@@ -99,41 +113,42 @@ Entering both is optional.
 
 ## 2. Phase 0 — Setup & recon
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| S1 | Python env with pandas/numpy (+ shapely/scipy) | TODO | |
-| S2 | Run `baseline_solve.py` on one practice leg end-to-end | TODO | |
-| S3 | Locate/obtain the scorer (`src/scoring/scorer.py`) | BLOCKED | Referenced by both READMEs, **not in this repo**. Ask organizers or reimplement (→ I3). |
-| S4 | Dump `sensors.db` schema + sample rates | DONE | → `DATA_SCHEMA.md`. Accel **and** gyro ~493 Hz, identical row counts per leg. |
-| S5 | Inventory all 50 legs: duration, length, GT quality, cell/wifi coverage | DONE | → §11. |
-| S6 | Inspect GTFS sqlite schema | DONE | → `DATA_SCHEMA.md`. Train number in `trips.trip_short_name`; `calendar_dates` authoritative. |
-| S7 | Inspect OSM network + station geojson structure | DONE | → `DATA_SCHEMA.md`. Routable graph is I2. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| S1 | Python env with pandas/numpy (+ shapely/scipy) | J | TODO | |
+| S2 | Run `baseline_solve.py` on one practice leg end-to-end | A | TODO | |
+| S3 | Locate/obtain the scorer (`src/scoring/scorer.py`) | A | BLOCKED | Referenced by both READMEs, **not in this repo**. Ask organizers or reimplement (→ I3). |
+| S4 | Dump `sensors.db` schema + sample rates | — | DONE | → `DATA_SCHEMA.md`. Accel **and** gyro ~493 Hz, identical row counts per leg. |
+| S5 | Inventory all 50 legs: duration, length, GT quality, cell/wifi coverage | — | DONE | → §11. |
+| S6 | Inspect GTFS sqlite schema | — | DONE | → `DATA_SCHEMA.md`. Train number in `trips.trip_short_name`; `calendar_dates` authoritative. |
+| S7 | Inspect OSM network + station geojson structure | — | DONE | → `DATA_SCHEMA.md`. Routable graph is I2. |
 
 ## 3. Phase 1 — Infrastructure (blocks everything else)
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| I1 | Leg loader: `sensors.db` + `meta.json` → dataframes on a common time grid | TODO | Pick the resample rate: 493 Hz × 1800 s ≈ 900k rows/leg/sensor. |
-| I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | TODO | Network is **~203 disconnected components**; stitch at way endpoints. |
-| I3 | Local scorer replicating the 6 metrics over all practice legs | TODO | Shape known from `starter_kit/example_scorer_output.json`. Exact tolerances blocked on S3. |
-| I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | TODO | |
-| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | TODO | |
-| I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | TODO | Use `stops.stop_name_nl`; handle bilingual Brussels + 2 unnamed OSM stations. Needed by R2/R3, T3. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| I7 | **Freeze the two data contracts + commit stub producers** | J | TODO | Do this first — 30 min. `shape.json` + `anchors.json` per `WORKLOG.md` → Data contracts. Stubs let both lanes start immediately. |
+| I1 | Leg loader: `sensors.db` + `meta.json` → dataframes on a common time grid | M | TODO | Pick the resample rate: 493 Hz × 1800 s ≈ 900k rows/leg/sensor. |
+| I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | TODO | Network is **~203 disconnected components**; stitch at way endpoints. |
+| I3 | Local scorer replicating the 6 metrics over all practice legs | A | TODO | Shape known from `starter_kit/example_scorer_output.json`. Exact tolerances blocked on S3. |
+| I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | A | TODO | |
+| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | TODO | |
+| I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | A | TODO | Use `stops.stop_name_nl`; handle bilingual Brussels + 2 unnamed OSM stations. Needed by R2/R3, T3. |
 
 ## 4. Phase 2 — Motion shape from IMU (`WORKLOG.md` step 2)
 
-Output: an ordered list of segments — `(type ∈ {left, right, straight},
-start_t, end_t, turn_angle)` — with **no length or absolute position**. Works
-on every leg; nothing here depends on cell/wifi.
+Whole phase is the **motion lane**. Output is `shape.json` — unscaled route
+topology, no length or absolute position. Works on every leg; nothing here
+depends on cell/wifi, so this lane never waits on the other.
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | TODO | Device pose is unknown and arbitrary. Everything in this phase depends on it. |
-| O2 | Handle orientation changes mid-leg (phone moved/picked up) | TODO | Detect and re-estimate rather than assume a fixed pose. |
-| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + cumulative angle | TODO | The signal that carries the shape. |
-| M2 | Stationary detector: rolling accel variance → moving vs stopped | TODO | Feeds H2 and T1. Stopped ≠ at station. |
-| M3 | Assemble the shape object + serialize it (debuggable intermediate) | TODO | Everything downstream consumes this, so give it a stable form early. |
-| M4 | Sanity-check shapes against GT track geometry on `good` legs | TODO | Eyeball turn count/order vs real route before trusting hydration. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| O1 | Orientation recovery: gravity direction + longitudinal axis → rotate sensor axes to track axes | M | TODO | Device pose is unknown and arbitrary. Hardest unknown in the project; everything in this phase depends on it. |
+| O2 | Handle orientation changes mid-leg (phone moved/picked up) | M | TODO | Detect and re-estimate rather than assume a fixed pose. Sets `orientation_ok`. |
+| M1 | Turn segmentation: integrate yaw rate → left/right/straight events + signed `turn_deg` | M | TODO | The signal that carries the shape. |
+| M2 | Stationary detector: rolling accel variance → `moving` flag per segment | M | TODO | Feeds H2/H3 and T1. Stopped ≠ at station. |
+| M3 | Write `shape.json` to the frozen contract | M | TODO | Replaces the I7 stub. Keep the stub's schema exactly. |
+| M4 | Sanity-check shapes against GT track geometry on `good` legs | M | TODO | Eyeball turn count/order vs real route before trusting hydration. |
 
 ## 5. Phase 3 — Shape hydration (`WORKLOG.md` step 3) — new core
 
@@ -141,80 +156,89 @@ Turns the unscaled shape into metric geometry: give every segment a length.
 Turn segments act as high-confidence anchors; straight segments get stretched
 (or held flat, if stopped) to fit absolute estimates.
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| H1 | Absolute-position estimates on the leg timeline: `(t, lat, lon, radius)` from cell and wifi | TODO | Consumes P1–P3. Sparse or wholly absent — hydration must degrade, not fail. |
-| H2 | Segment length prior from IMU: speed estimate (accel integration w/ drift control and/or vibration energy → speed regression) | TODO | Replaces pure dead reckoning as the *only* scale source; it's now a prior the anchors correct. |
-| H3 | Stopped-vs-moving call per straight segment | TODO | M2 proposes, H1 estimates ± radius confirm. Radius width gates confidence. |
-| H4 | Hydration solver: assign lengths so the shape fits all estimates within their radii | TODO | Start with the simplest thing that works (least-squares / monotone fit) before reaching for a particle filter. |
-| H5 | Per-segment confidence out of the solver | TODO | Feeds fusion weighting (N3) and the lock-in policy (R4). |
-| H6 | Output: hydrated polyline + `distance-along-time` curve | TODO | This is the artifact Phase 4 snaps. |
-| H7 | No-anchor fallback: leg with zero cell **and** useless wifi | TODO | 24/50 legs. H2 prior + GTFS timing is all there is. Don't discover this at 16h05 (→ X6). |
+**Where the lanes meet.** Reads `shape.json` + `anchors.json`. `H4` is paired
+on, not split — this is where the idea lives and a bad hand-off costs most.
+`H1`/`H2` are lane-local because each writes into its own side's file.
+
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | TODO | Replaces the I7 stub. Consumes P1–P3. Empty list is a **valid** output (24/50 legs). |
+| H2 | Segment length prior from IMU: speed estimate (accel integration w/ drift control and/or vibration energy → speed regression) | M | TODO | Fills `speed_prior_mps`/`length_prior_m` in `shape.json`. A prior the anchors correct — not the answer. |
+| H3 | Stopped-vs-moving resolution per straight segment | J | TODO | M2's `moving` flag proposes, anchors ± radius confirm. Radius width gates confidence. |
+| H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | TODO | **Pair on this.** Start with least-squares / monotone fit before reaching for a particle filter. |
+| H5 | Per-segment confidence out of the solver | J | TODO | Feeds fusion weighting (N3) and the lock-in policy (R4). |
+| H6 | Output: hydrated polyline + `distance-along-time` curve | J | TODO | The artifact Phase 4 snaps. |
+| H7 | No-anchor fallback: leg with zero cell **and** useless wifi | J | TODO | 24/50 legs. H2 prior + GTFS timing is all there is. Don't discover this at 16h05 (→ X6). |
 
 ## 6. Phase 4 — Map matching & fusion (`WORKLOG.md` step 6) → metric #3
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| N1 | Stitch the OSM graph into routable components | TODO | Extends I2; ~203 components as delivered. |
-| N2 | Precompute curvature signature per candidate OSM route | TODO | The thing M1's turn sequence gets matched against. |
-| N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | TODO | Weight by H5. Track-constrained, so this is a 1-D problem once the route is picked. |
-| N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | TODO | Size the actual drift before building for it. |
-| N5 | Align to GTFS timetable (arrival times along the matched route) | TODO | Cross-checks N3 and feeds R3/T2. |
-| N6 | Tunnel / long-gap behaviour — keep emitting sane estimates | TODO | GT has >60 s gaps; we still have to output rows. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| N1 | Stitch the OSM graph into routable components | A | TODO | Extends I2; ~203 components as delivered. |
+| N2 | Precompute curvature signature per candidate OSM route | A | TODO | What M1's turn sequence gets matched against. Build it to consume `shape.json` directly. |
+| N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | J | TODO | Weight by H5. Track-constrained, so 1-D once the route is picked. |
+| N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | A | TODO | Contracts carry **raw** epochMillis — drift correction happens only here. Size the drift first. |
+| N5 | Align to GTFS timetable (arrival times along the matched route) | A | TODO | Cross-checks N3 and feeds R3/T2. |
+| N6 | Tunnel / long-gap behaviour — keep emitting sane estimates | J | TODO | GT has >60 s gaps; we still have to output rows. |
 
 ## 7. Phase 5 — Route discovery (metrics #1, #2)
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| P1 | Cell tower → position prior: join `cell_samples.cellId` against `flanders_cells.csv` | TODO | See P2 — the join is **not clean**. |
-| P2 | Resolve the cellId join ambiguity | TODO | We have only `cellId`, no LAC/TAC; OpenCelliD's key is `(radio,mcc,net,area,cell)`. Expect several candidate towers → multi-hypothesis prior. `networkType=NR` has no match at all. |
-| P3 | WiFi AP fingerprinting — do BSSIDs recur across legs/stations? | TODO | Low expectations (as few as 1 distinct BSSID on a leg). Bonus signal. |
-| R1 | Candidate trip generation: date → `calendar_dates` → active trips + stop patterns | TODO | Filter by coarse position + time of day. |
-| R2 | Eliminate candidates as the leg progresses: turn sequence, stop pattern, inter-stop timing, direction | TODO | `WORKLOG.md` step 4. The shape (M3) is a strong discriminator here — use it, not just timing. |
-| R3 | Inter-station timing model — must not treat a signal stop as a station | TODO | Pairs with T1. |
-| R4 | Lock-in policy — commit early, then **never change** | TODO | Metric #2 scores the last change, not the first correct guess. |
-| R5 | Fallback guess when confidence stays low | TODO | Open question: does blank `routeGuess` beat wrong? (§10) |
-| R6 | Format the guess: `route_short_name` + `trip_short_name` → e.g. `IC830` | TODO | Confirm casing/spacing against the scorer. Leg ids use `ic830`. |
+`P1–P3` feed `anchors.json` and belong to the absolute lane's early parallel
+block; `R*` is that lane's endgame work.
+
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| P1 | Cell tower → position prior: join `cell_samples.cellId` against `flanders_cells.csv` | A | TODO | See P2 — the join is **not clean**. |
+| P2 | Resolve the cellId join ambiguity | A | TODO | We have only `cellId`, no LAC/TAC; OpenCelliD's key is `(radio,mcc,net,area,cell)`. Several candidate towers → the `candidates` list in `anchors.json`. `networkType=NR` has no match at all. |
+| P3 | WiFi AP fingerprinting — do BSSIDs recur across legs/stations? | A | TODO | Low expectations (as few as 1 distinct BSSID on a leg). Bonus signal. |
+| R1 | Candidate trip generation: date → `calendar_dates` → active trips + stop patterns | A | TODO | Filter by coarse position + time of day. |
+| R2 | Eliminate candidates as the leg progresses: turn sequence, stop pattern, inter-stop timing, direction | A | TODO | `WORKLOG.md` step 4. `shape.json`'s turn sequence is a strong discriminator — use it, not just timing. |
+| R3 | Inter-station timing model — must not treat a signal stop as a station | A | TODO | Pairs with T1. |
+| R4 | Lock-in policy — commit early, then **never change** | A | TODO | Metric #2 scores the last change, not the first correct guess. |
+| R5 | Fallback guess when confidence stays low | A | TODO | Open question: does blank `routeGuess` beat wrong? (§10) |
+| R6 | Format the guess: `route_short_name` + `trip_short_name` → e.g. `IC830` | A | TODO | Confirm casing/spacing against the scorer. Leg ids use `ic830`. |
 
 ## 8. Phase 6 — Station detection (metric #6)
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| T1 | Stop detector: M2 stops + **dwell duration** to reject signal stops | TODO | Baseline's known failure mode. |
-| T2 | Cross-check candidate stops against our position (N3) vs the OSM station list | TODO | |
-| T3 | Name the arrival from `belgium_rail_stations.geojson` (never `meta.json`) | TODO | 717 points = 458 `station` + 259 `halt`. Depends on I6. |
-| T4 | Use GTFS dwell/stop patterns as a prior on which candidate is real | TODO | `pickup_type='1'` = pass-through, not a call. |
-| T5 | 500 m-out arrival prediction — fire exactly once per arrival | TODO | Submission channel unclear (§10). |
-| T6 | Validate timing error within ±90 s across practice legs | TODO | |
+Motion lane's endgame work — it already owns the stationary detector.
+
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| T1 | Stop detector: M2 stops + **dwell duration** to reject signal stops | M | TODO | Baseline's known failure mode. |
+| T2 | Cross-check candidate stops against our position (N3) vs the OSM station list | M | TODO | |
+| T3 | Name the arrival from `belgium_rail_stations.geojson` (never `meta.json`) | M | TODO | 717 points = 458 `station` + 259 `halt`. Depends on I6 (A). |
+| T4 | Use GTFS dwell/stop patterns as a prior on which candidate is real | M | TODO | `pickup_type='1'` = pass-through, not a call. |
+| T5 | 500 m-out arrival prediction — fire exactly once per arrival | M | TODO | Submission channel unclear (§10). |
+| T6 | Validate timing error within ±90 s across practice legs | M | TODO | |
 
 ## 9. Phase 7 — Tracks, first fix, and the final round
 
 ### Warm start
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| W1 | Warm-start entry point: start station/coords/time as a hard anchor for H4 | TODO | A free, exact anchor — hydration gets much easier. `WORKLOG.md` → Constraints assumes this. |
-| W2 | Confirm route discovery narrows sharply given origin + departure time | TODO | Should collapse R1 to a handful of trips. |
-| W3 | **Decide: warm only, or both tracks** | TODO | Biggest scope lever left — it decides whether F1–F3 get built at all. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| W1 | Warm-start entry point: start station/coords/time → one `source: "warm_start"` anchor | A | TODO | A free, exact anchor — hydration gets much easier. Costs A almost nothing: same contract, one row. |
+| W2 | Confirm route discovery narrows sharply given origin + departure time | A | TODO | Should collapse R1 to a handful of trips. |
+| W3 | **Decide: warm only, or both tracks** | J | TODO | Biggest scope lever left — it decides whether F1–F3 get built at all. Decide before step 4 of the lane plan. |
 
 ### Cold start / first fix (metrics #4, #5) — gated on W3
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| F1 | Fastest coarse fix from the first cell/WiFi samples alone | TODO | **Unavailable on 24/50 legs** — needs a wifi-only or shape-only path. |
-| F2 | Snap the coarse fix to the nearest plausible track segment (<1 km to count) | TODO | |
-| F3 | Tune emit-now vs wait: fast+wrong and slow+right both lose | TODO | |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| F1 | Fastest coarse fix from the first cell/WiFi samples alone | A | TODO | **Unavailable on 24/50 legs** — needs a wifi-only or shape-only path. |
+| F2 | Snap the coarse fix to the nearest plausible track segment (<1 km to count) | A | TODO | |
+| F3 | Tune emit-now vs wait: fast+wrong and slow+right both lose | A | TODO | |
 
 ### Final round (16h00 → 17h00)
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| X1 | Freeze the pipeline ~15h30; no algorithm changes after handover | TODO | |
-| X2 | Smoke-test on a practice leg with `meta.json`/`ground_truth.csv` **removed** | TODO | Highest-value pre-flight check — proves nothing leaks. |
-| X3 | Run on `datasets/scoring_release/` immediately at 16h00 | TODO | |
-| X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | TODO | |
-| X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | TODO | |
-| X6 | Verify graceful degradation on a **cell-less** leg | TODO | Nearly half the data. Exercises H7. |
+| ID | Task | Own | Status | Notes |
+|----|------|-----|--------|-------|
+| X1 | Freeze the pipeline ~15h30; no algorithm changes after handover | J | TODO | |
+| X2 | Smoke-test on a practice leg with `meta.json`/`ground_truth.csv` **removed** | A | TODO | Highest-value pre-flight check — proves nothing leaks. |
+| X3 | Run on `datasets/scoring_release/` immediately at 16h00 | A | TODO | |
+| X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | TODO | |
+| X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | TODO | |
+| X6 | Verify graceful degradation on a **cell-less** leg | M | TODO | Nearly half the data. Exercises H7 — shape-only path must still emit. |
 
 ---
 
@@ -225,6 +249,8 @@ Turn segments act as high-confidence anchors; straight segments get stretched
 | | Team name: **TBD** | Needed for the submission folder name |
 | | Tracks entered: **TBD** | Resolve via W3. |
 | | Language/stack: **TBD** (Python assumed) | |
+| | Lane owners: motion = **TBD**, absolute = **TBD** | Two engineers, two lanes (§0). Put real names here so `Own` column is unambiguous. |
+| 2026-09-14 | Cut the pipeline at `shape.json` + `anchors.json` | Only clean seam between the two lanes; lets each side work against a stub of the other. Contracts in `WORKLOG.md`. |
 
 Open:
 - Where is `src/scoring/scorer.py`? Referenced by both READMEs, absent here

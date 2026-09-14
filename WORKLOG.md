@@ -86,4 +86,93 @@ Open gap in this plan: device orientation. Sensor axes are not track axes and
 the device pose is unknown, so steps 2 and 3 both need an orientation-recovery
 stage before they can use raw accel/gyro axes.
 
-Status: idea stage, not yet implemented. Task breakdown in `TASKS.md`.
+## Data contracts
+
+Two engineers work in parallel, so the pipeline is cut at two files. These
+are the *only* interfaces between the motion side (step 2) and the absolute
+side (step 1); hydration (step 3) is the sole consumer of both. Freeze the
+field names before writing algorithm code — both sides start against a
+hand-written stub of the other's output, so neither ever blocks.
+
+Shared conventions for both files:
+- `t_*` is device `epochMillis` (int), raw and unadjusted. Clock-drift
+  correction happens later, in fusion — nobody applies it here.
+- Angles in degrees, distances in metres, speeds in m/s. WGS84 lat/lon.
+- Files are per leg, written to `work/<leg_id>/`, JSON. Written to disk on
+  purpose: they are the debuggable intermediates, and they let either side
+  re-run without the other's code.
+
+### `shape.json` — produced by the motion side (step 2)
+
+Unscaled route topology. Ordered, contiguous, gap-free in time.
+
+```jsonc
+{
+  "leg_id": "ic830_00",
+  "t_start": 1757830000000,
+  "t_end":   1757831800000,
+  "orientation_ok": true,       // false → O1 failed, treat shape as suspect
+  "segments": [
+    {
+      "seg_id": 0,
+      "type": "straight",       // "left" | "right" | "straight"
+      "t_start": 1757830000000,
+      "t_end":   1757830042000,
+      "turn_deg": 0.0,          // signed, + = right; 0 for straight
+      "moving": false,          // from the stationary detector (M2)
+      "speed_prior_mps": 0.0,   // mean over segment, from H2; null if unknown
+      "length_prior_m": 0.0,    // speed_prior × duration; null if unknown
+      "confidence": 0.9         // 0..1, how sure the classifier is
+    }
+  ]
+}
+```
+
+Key point: `length_prior_m` is a **prior, not an answer**. A `straight`
+segment with `moving: false` is the flat-vs-extend ambiguity of step 2 —
+hydration resolves it, not this file.
+
+### `anchors.json` — produced by the absolute side (step 1)
+
+Sparse absolute position estimates with uncertainty. May legitimately be an
+empty list: **24 of 50 legs have no cell at all**, and wifi alone is often
+worthless. An empty `anchors` array is a valid input, not an error.
+
+```jsonc
+{
+  "leg_id": "ic830_00",
+  "anchors": [
+    {
+      "t": 1757830115000,
+      "source": "cell",         // "cell" | "wifi" | "warm_start"
+      "candidates": [           // multi-hypothesis — cellId join is ambiguous
+        {"lat": 51.2194, "lon": 4.4025, "radius_m": 1200, "weight": 0.6},
+        {"lat": 51.1050, "lon": 4.3900, "radius_m": 1200, "weight": 0.4}
+      ]
+    }
+  ]
+}
+```
+
+`candidates` is a list because our recordings carry only `cellId` with no
+LAC/TAC, so one observation maps to several OpenCelliD towers (see step 1).
+A single-hypothesis anchor is just a one-element list. `weight` sums to 1
+per anchor. `source: "warm_start"` is the given start station/coords on the
+warm track — one exact anchor, small radius, weight 1.
+
+### Ownership
+
+| Side | Owns | Produces / consumes |
+|------|------|---------------------|
+| Motion | leg loader, orientation recovery, turn segmentation, stationary detector, speed prior, stop detection | writes `shape.json` |
+| Absolute | track model, OSM stitch + curvature signatures, cell join, wifi, GTFS candidate trips, name matching, local scorer, batch runner + submission writer | writes `anchors.json` |
+| Joint | **hydration and fusion** | reads both |
+
+Hydration is deliberately not split. It is where the idea actually lives and
+where a bad hand-off costs the most, so it gets paired on rather than divided.
+The absolute side carries the scorer and harness because its signal work is
+smaller and less uncertain — orientation recovery is the single hardest
+unknown, so nothing else stacks on top of it.
+
+Status: idea stage, not yet implemented. Task breakdown + owners in
+`TASKS.md`.
