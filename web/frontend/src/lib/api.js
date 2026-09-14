@@ -16,6 +16,9 @@ export const getEvents = (runId, legId, cursor = 0, limit = 500) =>
 export const fileUrl = (runId, legId, name) =>
   `/api/runs/${encodeURIComponent(runId)}/legs/${encodeURIComponent(legId)}/file/${encodeURIComponent(name)}`
 
+// Reference OSM layers (belgium_rail_network / belgium_rail_stations) — static, cache-friendly.
+export const getOsmLayer = layer => getJson(`/api/osm/${encodeURIComponent(layer)}`)
+
 /**
  * Subscribe to file-change notifications. `onChange(paths)` receives run-dir
  * relative paths, e.g. "20260914-1503-motion/ic830_00/shape.json".
