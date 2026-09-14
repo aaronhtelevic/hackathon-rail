@@ -61,6 +61,10 @@
   async function refreshRun () {
     if (!selectedRun) return
     run = await getRun(selectedRun)
+    if (autoSelect) {
+      const runningLeg = run.legs.find(l => l.status?.state === 'running')
+      if (runningLeg && runningLeg.leg_id !== selectedLeg) return selectLeg(runningLeg.leg_id)
+    }
     if (!selectedLeg || !run.legs.some(l => l.leg_id === selectedLeg)) {
       if (run.legs.length) await selectLeg(run.legs[0].leg_id)
       else { selectedLeg = null; leg = null; events = []; cursor = 0 }

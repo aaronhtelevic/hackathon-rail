@@ -244,7 +244,7 @@ def _ev(gui, stage, msg, **kw):
 
 
 def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None,
-               gui=None, sub_track: str = "warm") -> dict:
+               gui=None, sub_track: str = "warm", route_guess_from_ms: int | None = None) -> dict:
     """Batch solve: needs work/<leg>/shape.json to already exist to hydrate.
     `sub_track` only picks the submission folder: the cold track calls this with a `ws`
     inferred by absolute/cold.py instead of the given one.
@@ -253,7 +253,13 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
 
     The live, synchronized version of this is joint/stream.py — same result,
     but shape and anchors arrive as one leg-time stream and the hydrated
-    points come out as a third."""
+    points come out as a third.
+
+    `route_guess_from_ms`: when the caller already knows the leg-time at which
+    the route guess actually stopped changing (joint/stream.py tracks this
+    live), pass it so routeGuess is only backfilled from that point instead of
+    from row 0 — otherwise the final guess looks locked-in from t0 even though
+    it was arrived at after the whole leg was seen."""
     ws = ws or warm_from_meta(leg_id)
     if ws is None:
         raise ValueError(f"{leg_id}: no warm-start fields in meta.json")
@@ -330,7 +336,8 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
         call_ms = int(t_move + fine_t[min(i, len(fine_t) - 1)] * 1000)
         extra = {"source": "trapezoid"}
     lonlat = path.at_distance(dist)
-    submission.write_position(d, t_ms, lonlat[:, 0], lonlat[:, 1], hop.route_guess)
+    submission.write_position(d, t_ms, lonlat[:, 0], lonlat[:, 1], hop.route_guess,
+                               route_guess_from_ms=route_guess_from_ms)
     submission.write_station_calls(d, [(call_ms, dest.name)])
     _ev(gui, "N3", f"path {L:.0f} m, {info['window']}", pct=0.8)
     _ev(gui, "T4", f"500 m-out call '{dest.name}' at +{(call_ms - ws.t0_ms) / 1000:.0f}s", pct=0.9)

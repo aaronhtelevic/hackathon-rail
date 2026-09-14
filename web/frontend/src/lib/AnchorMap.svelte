@@ -187,7 +187,7 @@
 
     if (liveFix) {
       // Always keep the live estimate centered — this is the thing the user is tracking.
-      const z = fittedFix ? map.getZoom() : 15
+      const z = fittedFix ? map.getZoom() : 12
       map.setView(liveFix, z, { animate: fittedFix })
       fittedFix = true
     } else if (bounds.length && !fittedFix) {

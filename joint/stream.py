@@ -135,6 +135,16 @@ def solve_leg(leg_id: str, team: str, ws: solve.WarmStart | None = None,
     n_refits = 0
     best = cands[0] if cands else None
 
+    # Live position.csv: appended to as pts are fitted, tagged with whatever the
+    # guess is *at that tick* — causal, no backfill. `guess_locked_ms` tracks the
+    # leg time of the most recent guess change, so the final batch write below
+    # can backfill routeGuess only from there instead of from row 0 (see
+    # solve.solve_warm's route_guess_from_ms).
+    d = solve.submission.submission_dir(team, sub_track, leg_id, out_root)
+    last_emit_ms = ws.t0_ms
+    guess_locked_ms = ws.t0_ms
+    prev_guess = best.hop.route_guess if best else None
+
     for row in imu_stream(db):
         t = row[0]
         tk.step(*row)
@@ -150,26 +160,45 @@ def solve_leg(leg_id: str, team: str, ws: solve.WarmStart | None = None,
             wait = (t - tk.t_start_ms) / 1000.0 / cfg.demo_speed - (time.time() - demo_t0)
             if wait > 0:
                 time.sleep(min(wait, MAX_SLEEP_S))
-        best = _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t, t_hi)
+        best, pts = _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t, t_hi)
         n_refits += 1
+
+        guess = best.hop.route_guess if best else None
+        if guess != prev_guess:
+            guess_locked_ms = t
+            prev_guess = guess
+        if pts:
+            new_pts = [p for p in pts if p["t"] > last_emit_ms]
+            if new_pts:
+                solve.submission.append_position(
+                    d, [p["t"] for p in new_pts], [p["lon"] for p in new_pts],
+                    [p["lat"] for p in new_pts], guess)
+                last_emit_ms = new_pts[-1]["t"]
 
     shape = tk.finish()
     _write_contracts(leg_id, shape, warm, gui)
     _ev(gui, "M3", f"stream done: {len(shape['segments'])} segments, {len(live) - 1} cell anchors, "
         f"{n_refits} live refits", pct=0.75)
-    return solve.solve_warm(leg_id, team, ws, out_root, gui=gui, sub_track=sub_track)
+    # write_position (called by solve_warm below) overwrites position.csv outright
+    # with the full-resolution, end-pinned fit — needed for a correct submission —
+    # but routeGuess is backfilled only from guess_locked_ms, the leg time the
+    # live guess last changed, not from t0.
+    return solve.solve_warm(leg_id, team, ws, out_root, gui=gui, sub_track=sub_track,
+                             route_guess_from_ms=guess_locked_ms)
 
 
 def _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t_now, t_hi):
     """One tick of the joined stream: fit the prefix on every live candidate,
-    emit the hydrated points of the winner."""
+    emit the hydrated points of the winner. Returns (winner, pts) — pts is
+    None when nothing new could be fit this tick (unfitted candidates or no
+    shape segments yet), so the caller knows not to touch the CSV."""
     shape = _shape_prefix(tk, leg_id)
     anchor_doc = {"leg_id": leg_id, "anchors": live}
     if gui is not None:
         gui.shape(shape)
         gui.anchors(anchor_doc)
     if not shape["segments"] or not cands:
-        return best
+        return best, None
 
     fitted: list[tuple[_Candidate, hydrate.Hydrated]] = []
     for c in cands:
@@ -186,7 +215,7 @@ def _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t_now, t_hi):
         c.live_cost = c.timing_cost + solve.SHAPE_COST_PER_M * hy.cost / max(hy.n_segments, 1)
         fitted.append((c, hy))
     if not fitted:
-        return best
+        return best, None
 
     fitted.sort(key=lambda ch: ch[0].live_cost)
     winner, hy = fitted[0]
@@ -201,7 +230,7 @@ def _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t_now, t_hi):
         f"({winner.hop.to.name}), fit {hy.cost:.0f}" + (" [guess changed]" if changed else ""),
         level="warn" if changed else "info",
         pct=min(0.7, 0.1 + 0.6 * (t_now - ws.t0_ms) / max(t_hi - ws.t0_ms, 1)))
-    return winner
+    return winner, pts
 
 
 def _write_contracts(leg_id: str, shape: dict, warm: dict, gui) -> None:
