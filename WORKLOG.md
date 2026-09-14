@@ -341,6 +341,12 @@ Code: `absolute/hydrate.py`, called from `absolute/solve.py::solve_warm` and
   the trapezoid window (`motion_window`) — 324 → 530 m median. Hydration
   consumes the flags with context; the raw first flicker does not mean the
   train rolled.
+- **The 500 m-out call (step 4 / Phase 6) is a by-product**: the instant the
+  hydrated curve crosses `L − 500`, named with the GTFS destination. Over the
+  43 scoreable correct-route practice legs the signed timing error is median
+  −1.5 s, p90 43 s, against a ±90 s tolerance — no bias to correct, and our
+  OSM `L` is only ~110 m short of the organizers' route length. The remaining
+  misses are unscoreable (reference moment inside a GT gap) or a wrong route.
 - **Not done**: `sigma_m` (H5) is written but nothing weights by it yet; the
   motion-lane dwell miss (`ic3013_03`) is best fixed at the source (M2), the
   schedule prior is a patch over it.

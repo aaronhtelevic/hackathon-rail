@@ -297,16 +297,18 @@ block; `R*` is that lane's endgame work.
 Rescoped after reading `scorer/metrics.py`. The metric is **one prediction per
 leg**: name the destination, timed within ±90 s of the moment the train is
 500 m from the leg's end. Only the first row of `station_calls.csv` counts.
-Motion lane's endgame work.
+Motion lane's endgame work — in practice it fell out of hydration (Phase 3)
+and was closed by the absolute engineer on 2026-09-14: the call is where the
+hydrated curve crosses `L − 500`, nothing more.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| T1 | Predict the 500 m-out moment: `remaining_distance ≤ 500 m` off our own position estimate | M | TODO | This is a *distance* problem, not a stop-detection one — it fires **before** arrival, while still moving. |
-| T2 | Estimate leg length so "remaining" is computable without `routeLengthM` | M | TODO | `routeLengthM` is in `meta.json` = label. Must come from the matched route (N3) or GTFS stop spacing (N5). **The crux of this metric.** |
-| T3 | Name the destination: identify `stationTo` from route + direction | M | TODO | Scorer's name match is substring either direction, so close is good enough. Needs I6 (A) for NL/FR. |
-| T4 | Emit exactly one row, at the best single moment | M | TODO | Extra calls are ignored, not penalised — but only the *first* is scored, so an early wrong call wastes the leg. |
-| T5 | Validate against the scorer across practice legs | M | TODO | `stationDetection.timingErrorS` per leg. |
-| T6 | Decide whether stop/dwell detection is still worth building | M | TODO | Nothing in the 6 metrics scores it. It may still help R3 timing and H3 — but it is no longer a deliverable of its own. |
+| T1 | Predict the 500 m-out moment: `remaining_distance ≤ 500 m` off our own position estimate | M | DONE | `solve.py::solve_warm`: the call fires when the hydrated distance-along-time curve (`Hydrated.time_at_distance`) crosses `L − 500`; trapezoid fallback does the same on its profile. Fires while moving, before arrival. |
+| T2 | Estimate leg length so "remaining" is computable without `routeLengthM` | M | DONE | `L` = length of our OSM path start→destination (`track.Path.length_m`). Against `routeLengthM` (dev check only): median 109 m short — the OSM station node vs the polyline end — worth ~4 s, no correction applied. Two outliers are hairpin routes (N1: `ic2315_00` −2.7 km, `ic3033_03` −2.4 km) and still land within tolerance. |
+| T3 | Name the destination: identify `stationTo` from route + direction | M | DONE | Destination = `hop.to.name` from the GTFS pick (R3), emitted as-is; the scorer's substring match absorbs FR/NL and hyphenation (`Brussels Airport-Zaventem` ↔ `Brussels-Airport`). |
+| T4 | Emit exactly one row, at the best single moment | M | DONE | Exactly one row per leg; on a leg with no route we write an empty `station_calls.csv` rather than a wrong early call. |
+| T5 | Validate against the scorer across practice legs | M | DONE | 43 scoreable legs with a correct route: signed error median −1.5 s, mean +6.7 s, p90 |err| 43 s, tolerance is ±90 s. **42/50 detected.** The 8 misses: 6 have `referenceTimeMs = None` (500 m reference moment falls in a GT gap → unscoreable for anyone), 1 wrong route (`l1679_02`), 1 timing 124 s on a *bad*-GT leg (`ic536_01`). Nothing left to win here on the practice set. |
+| T6 | Decide whether stop/dwell detection is still worth building | M | DONE | Decision: **not built as its own deliverable.** Stop/dwell detection lives in the motion lane's `moving` flag and is consumed by hydration (H3); the platform-dwell miss it still has (`ic3013_03`) is an M2 issue, not a Phase 6 one. |
 
 ## 9. Phase 7 — Tracks, first fix, and the final round
 
