@@ -1,6 +1,8 @@
 <script>
   // Every leg's score.json across every run, as one table — no map, no timeline.
   import { listScores } from './api.js'
+  import Info from './Info.svelte'
+  import { SCORE_INFO } from './scoreInfo.js'
 
   let { visible = false } = $props()
 
@@ -76,11 +78,15 @@
   $effect(() => { if (visible) load() })
 
   const COLS = [
-    ['run_id', 'run'], ['leg_id', 'leg'], ['algorithm', 'algo'], ['track', 'track'],
-    ['medErrM', 'med err (m)'], ['meanErrM', 'mean err (m)'], ['maxErrM', 'max err (m)'],
-    ['route', 'route'], ['routeOK', 'route ok'], ['lockInS', 'lock-in (s)'],
-    ['stationOK', 'station'], ['stTimingS', 'Δt (s)'],
-    ['ttffS', 'ttff (s)'], ['ffErrM', 'ff err (m)'],
+    ['run_id', 'run', null], ['leg_id', 'leg', null],
+    ['algorithm', 'algo', SCORE_INFO.algorithm], ['track', 'track', SCORE_INFO.track],
+    ['medErrM', 'med err (m)', SCORE_INFO.medianErr],
+    ['meanErrM', 'mean err (m)', SCORE_INFO.meanMaxErr],
+    ['maxErrM', 'max err (m)', SCORE_INFO.meanMaxErr],
+    ['route', 'route', SCORE_INFO.routeGuess], ['routeOK', 'route ok', SCORE_INFO.routeGuess],
+    ['lockInS', 'lock-in (s)', SCORE_INFO.lockIn],
+    ['stationOK', 'station', SCORE_INFO.station], ['stTimingS', 'Δt (s)', SCORE_INFO.stationTiming],
+    ['ttffS', 'ttff (s)', SCORE_INFO.firstFix], ['ffErrM', 'ff err (m)', SCORE_INFO.ffErr],
   ]
 </script>
 
@@ -105,9 +111,12 @@
     <table>
       <thead>
         <tr>
-          {#each COLS as [key, label] (key)}
-            <th onclick={() => sortBy(key)} aria-sort={sortKey === key ? (sortDir === 1 ? 'ascending' : 'descending') : 'none'}>
-              {label}{sortKey === key ? (sortDir === 1 ? ' ▲' : ' ▼') : ''}
+          {#each COLS as [key, label, info] (key)}
+            <th aria-sort={sortKey === key ? (sortDir === 1 ? 'ascending' : 'descending') : 'none'}>
+              <button type="button" class="th-inner" onclick={() => sortBy(key)}>
+                {label}{sortKey === key ? (sortDir === 1 ? ' ▲' : ' ▼') : ''}
+              </button>
+              {#if info}<Info text={info} />{/if}
             </th>
           {/each}
         </tr>
@@ -149,7 +158,12 @@
   .table-wrap { overflow: auto; flex: 1; }
   table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
   th, td { padding: 4px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
-  th { position: sticky; top: 0; background: var(--panel); cursor: pointer; user-select: none; }
+  th { position: sticky; top: 0; background: var(--panel); user-select: none; white-space: nowrap; }
+  .th-inner {
+    background: none; border: none; padding: 0; font: inherit; color: inherit;
+    cursor: pointer; white-space: nowrap;
+  }
+  .th-inner:hover { border-color: transparent; }
   tbody tr:hover { background: var(--panel-2); }
   .ok { color: var(--ok); }
   .bad { color: var(--bad); }

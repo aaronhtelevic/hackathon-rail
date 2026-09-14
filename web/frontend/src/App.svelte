@@ -24,6 +24,18 @@
   let tab = $state('detail')        // 'detail' | 'scores'
   let clearing = $state(false)
 
+  let theme = $state((() => {
+    try { return localStorage.getItem('rail-gui-theme') ?? 'dark' } catch { return 'dark' }
+  })())
+
+  function toggleTheme () {
+    theme = theme === 'light' ? 'dark' : 'light'
+    document.documentElement.dataset.theme = theme
+    try { localStorage.setItem('rail-gui-theme', theme) } catch { /* private mode etc */ }
+  }
+
+  $effect(() => { document.documentElement.dataset.theme = theme })
+
   async function onClearRuns () {
     if (!confirm('Delete every run under the runs dir? This cannot be undone.')) return
     clearing = true
@@ -149,6 +161,9 @@
     <button aria-pressed={tab === 'scores'} onclick={() => (tab = 'scores')}>all scores</button>
   </div>
   <button class="danger" disabled={clearing} onclick={onClearRuns}>{clearing ? 'clearing…' : 'clear all output'}</button>
+  <button class="theme-toggle" onclick={toggleTheme} title="toggle light/dark theme">
+    {theme === 'light' ? '☀︎ light' : '☾ dark'}
+  </button>
   <span class="dim mono path">{config?.runsDir ?? ''}</span>
 </header>
 
