@@ -15,14 +15,34 @@ Status key: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DROPPED`
 
 ## 0. Where we are
 
-Recon phase complete; **nothing implemented yet**. Schema documented
-(`DATA_SCHEMA.md`), per-leg coverage survey done (§11), approach sketched in
-`WORKLOG.md` → Algorithm. Next real work is Phase 1 — I7/I1/I2 block
-everything downstream.
+**Absolute lane has an end-to-end warm-start solver** (`absolute/`, run with
+`.venv/bin/python scripts/run_warm.py`). No IMU used yet — GTFS picks the
+train and destination, OSM gives the path, a schedule-timed trapezoid gives
+position, and the 500 m-out call falls out of the same profile. Scores on
+the 50 practice legs (44 good-GT):
 
-The organizers' scorer landed in `scorer/` — S3 unblocked, all tolerances now
-exact, and metric #6 turned out to mean something different than assumed
-(§1). `I3` shrank to a wrapper; `T1–T6` were rescoped.
+| metric | baseline (`ic830_00` only) | absolute-only, all legs |
+|---|---|---|
+| position, median-of-medians (good GT) | 974 m | **324 m** (mean-of-medians 687 m) |
+| route correct / lock-in | — | **44/50**, 0 s |
+| station call detected / median \|timing\| | 0/1 | **40/50**, 17 s — the 6 misses with a correct route are **unscoreable** (500 m reference moment falls in a GT gap) |
+
+Where the remaining error sits, in order: (1) 6 wrong GTFS picks — 3 are
+same-destination/same-hop pairs nothing in this leg can separate
+(`ic2035`/`s33 2963`, `ic536`/`s2 3785`, `ic3033`/`ic2633`), 3 are
+opposite-direction pairs on **cell-less** legs (`ic2809_03`, `l1679_02`,
+`ic4112_00`) that need the motion lane's initial heading; (2) the platform dwell
+at the start of every leg — timing is a schedule prior, the motion lane's
+`shape.json` `moving` flags replace it as soon as they exist (already wired in
+`solve.py::motion_window`); (3) four hairpin routes in OSM (N1).
+
+Motion lane: see M/O/H2 rows. Hydration (H3–H7) not started.
+
+**Decision taken (A):** we submit **`latitude,longitude`**, not
+`distanceAlongTrackM`. The scorer projects onto its own polyline, so we never
+have to reproduce the organizers' distance origin — and it makes the "will
+scoring legs ship polylines?" question (X7) moot for *our* output: the
+organizers need them to score at all.
 
 **The finding that most shapes the plan: 24 of 50 practice legs have zero
 cell samples** (§11). Cell-based positioning can't be the backbone.
@@ -143,8 +163,8 @@ Consequences worth internalizing:
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| S1 | Python env with pandas/numpy (+ shapely/scipy) | J | TODO | |
-| S2 | Run `baseline_solve.py` on one practice leg end-to-end | A | TODO | |
+| S1 | Python env with pandas/numpy (+ shapely/scipy) | J | DONE | `.venv` via `uv venv .venv --python 3.12` + `uv pip install numpy pandas scipy shapely matplotlib pyproj`. No root needed. Always run as `.venv/bin/python`. |
+| S2 | Run `baseline_solve.py` on one practice leg end-to-end | A | DONE | Baseline scores 974 m median on `ic830_00`; scorer runs in-process from `absolute/harness.py`. |
 | S3 | Locate/obtain the scorer | A | DONE | It's `scorer/` — organizers' real logic, not a reimplementation. Tolerances now known exactly (§1); I3 drops to a thin wrapper. |
 | S8 | Read `scorer/metrics.py` and confirm every task's assumed metric matches | A | DONE | Metric #6 turned out to be a 500 m-out prediction, not arrival detection → rescoped T1–T6. |
 | S4 | Dump `sensors.db` schema + sample rates | — | DONE | → `DATA_SCHEMA.md`. Accel **and** gyro ~493 Hz, identical row counts per leg. |
@@ -156,13 +176,13 @@ Consequences worth internalizing:
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| I7 | **Freeze the two data contracts + commit stub producers** | J | TODO | Do this first — 30 min. `shape.json` + `anchors.json` per `WORKLOG.md` → Data contracts. Stubs let both lanes start immediately. |
+| I7 | **Freeze the two data contracts + commit stub producers** | J | DONE | anchors side is the real producer (`absolute/anchors.py`), written to `work/<leg>/anchors.json` by the warm solver. `shape.json` is read opportunistically by `absolute/solve.py::motion_window` — the motion lane owns writing it. |
 | I1 | Leg loader: `sensors.db` + `meta.json` → dataframes on a common time grid | M | TODO | Pick the resample rate: 493 Hz × 1800 s ≈ 900k rows/leg/sensor. |
-| I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | TODO | Network is **~203 disconnected components**; stitch at way endpoints. |
-| I3 | Wrapper around `scorer/scorer.py` — import `score_leg()` directly, don't shell out per leg | A | TODO | Was "reimplement the scorer"; the real one is in `scorer/`. Just aggregation now. |
-| I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | A | TODO | |
-| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | TODO | |
-| I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | A | TODO | Use `stops.stop_name_nl`; handle bilingual Brussels + 2 unnamed OSM stations. Needed by R2/R3, T3. |
+| I2 | Track model: OSM → linestrings with cumulative distance; project lat/lon ↔ (edge, distance-along) | A | DONE | `absolute/track.py`. 250k nodes / 257k edges; stitching at ≤8 m collapses 203 → **48** components, largest 249k nodes. 23/50 legs within 2 % of true length; the rest → N1. |
+| I3 | Wrapper around `scorer/scorer.py` — import `score_leg()` directly, don't shell out per leg | A | DONE | `absolute/harness.py` — imports `scorer.score_leg`, flattens to one row per leg, prints a summary. |
+| I4 | Submission writer: exact `<team>/<track>/<leg_id>/` layout + columns | A | DONE | `absolute/submission.py`. We emit **lat/lon**, not `distanceAlongTrackM` — see §0 / decision log. |
+| I5 | Batch runner: all 50 legs → metrics table + per-leg diagnostics | A | DONE | `scripts/run_warm.py` solves + scores all 50 legs in ~2 min; table saved to `work/warm_scores.csv`. |
+| I6 | Name-matching layer: GTFS names are *French* (`Anvers-Central`), OSM + leg ids are *Dutch* (`antwerpen_centraal`) | A | DONE | `absolute/stations.py`: **UIC join** — GTFS `stop_id` `gs:nmbssncb:8896008` ↔ OSM `uic_ref`. 672/835 stations keyed. Name fallback = scorer normalisation + order-free token prefixes (`aspere gavere` → `Gavere-Asper`). 39/39 leg station names resolve. |
 
 ## 4. Phase 2 — Motion shape from IMU (`WORKLOG.md` step 2)
 
@@ -191,7 +211,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | TODO | Replaces the I7 stub. Consumes P1–P3. Empty list is a **valid** output (24/50 legs). |
+| H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | DONE | `absolute/anchors.py`. 10 s bins, multi-candidate. On `ic536_02`: 108 anchors, 87 % contain the true position within radius, centroid error median 931 m — cell is coarse. |
 | H2 | Segment length prior from IMU: speed estimate (accel integration w/ drift control and/or vibration energy → speed regression) | M | TODO | Fills `speed_prior_mps`/`length_prior_m` in `shape.json`. A prior the anchors correct — not the answer. |
 | H3 | Stopped-vs-moving resolution per straight segment | J | TODO | M2's `moving` flag proposes, anchors ± radius confirm. Radius width gates confidence. |
 | H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | TODO | **Pair on this.** Start with least-squares / monotone fit before reaching for a particle filter. |
@@ -203,11 +223,11 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| N1 | Stitch the OSM graph into routable components | A | TODO | Extends I2; ~203 components as delivered. |
+| N1 | Stitch the OSM graph into routable components | A | WIP | Stitching done (I2). Remaining failures are **hairpin reversals** at junctions (Zedelgem↔Torhout 7.8 vs 10.4 km, Antwerpen-Zuid↔Linkeroever 3.1 vs 5.4 km) — same OSM line, physically impossible turn. Needs turn-angle penalties (edge-based dijkstra). |
 | N2 | Precompute curvature signature per candidate OSM route | A | TODO | What M1's turn sequence gets matched against. Build it to consume `shape.json` directly. |
 | N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | J | TODO | Weight by H5. Track-constrained, so 1-D once the route is picked. |
-| N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | A | TODO | Contracts carry **raw** epochMillis — drift correction happens only here. Size the drift first. |
-| N5 | Align to GTFS timetable (arrival times along the matched route) | A | TODO | Cross-checks N3 and feeds R3/T2. |
+| N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | A | DONE | Measured, not corrected: t0 sits within ±2 min of scheduled departure on all legs, symmetric. No clock-drift term needed at this accuracy. |
+| N5 | Align to GTFS timetable (arrival times along the matched route) | A | DONE | Folded into `absolute/gtfs.py::rank_hops` + `absolute/solve.py::motion_window`: scheduled dep/arr define the timing prior. |
 | N6 | Tunnel / long-gap behaviour — keep emitting sane estimates | J | TODO | GT has >60 s gaps; we still have to output rows. |
 
 ## 7. Phase 5 — Route discovery (metrics #1, #2)
@@ -217,15 +237,15 @@ block; `R*` is that lane's endgame work.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| P1 | Cell tower → position prior: join `cell_samples.cellId` against `flanders_cells.csv` | A | TODO | See P2 — the join is **not clean**. |
-| P2 | Resolve the cellId join ambiguity | A | TODO | We have only `cellId`, no LAC/TAC; OpenCelliD's key is `(radio,mcc,net,area,cell)`. Several candidate towers → the `candidates` list in `anchors.json`. `networkType=NR` has no match at all. |
+| P1 | Cell tower → position prior: join `cell_samples.cellId` against `flanders_cells.csv` | A | DONE | `absolute/cells.py`. Exact `(radio, cell)` match resolves 35 % of distinct ids. |
+| P2 | Resolve the cellId join ambiguity | A | DONE | The ambiguity worry was unfounded — every exact match is **unique**. The real problem is coverage: West-Flanders rides (`ic2315`, `s51_761`) hit 0 %. **eNodeB fallback** (`cellId >> 8`, centroid of sibling cells) lifts 35 % → 56 % of ids. |
 | P3 | WiFi AP fingerprinting — do BSSIDs recur across legs/stations? | A | TODO | Low expectations (as few as 1 distinct BSSID on a leg). Bonus signal. |
-| R1 | Candidate trip generation: date → `calendar_dates` → active trips + stop patterns | A | TODO | Filter by coarse position + time of day. |
-| R2 | Eliminate candidates as the leg progresses: turn sequence, leg duration, direction, start/end spacing | A | TODO | `WORKLOG.md` step 4. A leg is **one hop**, so there is no in-leg stop pattern to observe — `shape.json`'s turn sequence and the hop's length/duration do the discriminating. |
-| R3 | Match the leg's duration + endpoints against GTFS consecutive `stop_times` pairs | A | TODO | Replaces the multi-stop timing model. A ~252 s / 3.3 km hop narrows candidates hard. |
-| R4 | Lock-in policy — commit early, then **never change** | A | TODO | Metric #2 only pays out **if the final guess is correct**; a wrong final guess scores zero on both #1 and #2. |
-| R5 | Fallback guess when confidence stays low | A | TODO | Scorer treats null and wrong identically (`correct: false`, `lockInTimeS: null`), so a wrong guess costs nothing vs. blank — **always guess**. Resolved; keep the task for choosing *which* fallback. |
-| R6 | Format the guess as `meta.lineName` — lowercase line id, e.g. `ic4112`, `l1679`, `s51_785` | A | TODO | Resolved from `scorer/scorer.py`: truth is `meta["lineName"]`, which equals the leg-id prefix. No trip number, no `IC` prefix; case/dashes are normalised away anyway. |
+| R1 | Candidate trip generation: date → `calendar_dates` → active trips + stop patterns | A | DONE | `absolute/gtfs.py::hops_from` — `calendar_dates` → active trips → every downstream call (up to 4) per trip departing the start station ±10 min. |
+| R2 | Eliminate candidates as the leg progresses: turn sequence, leg duration, direction, start/end spacing | A | DONE | Timing shortlist re-ranked by **median** cell-anchor misfit against each candidate's OSM path, 0.2 s/m (`solve.py::choose_hop`). 41 → **44/50**. Mean misfit was rejected: one bad eNB centroid dominated. Remaining misses: same-destination pairs (unresolvable here) and opposite directions on cell-less legs (→ motion lane heading, feed into `rank_hops`). |
+| R3 | Match the leg's duration + endpoints against GTFS consecutive `stop_times` pairs | A | DONE | `rank_hops`: `\|t0 − dep\| + 1.5·\|T_obs − (sched + 110 s)\| + 120 s per skipped call`. The 110 s is measured leg overhead (dwell + tail). 40 → 41/50 top-1; truth in top-2 on 47/50. |
+| R4 | Lock-in policy — commit early, then **never change** | A | DONE | By construction: `routeGuess` filled from row 0, never changes → `lockInTimeS = 0` on every correct leg. |
+| R5 | Fallback guess when confidence stays low | A | DONE | Always guess; the top-ranked hop is emitted even at low confidence. |
+| R6 | Format the guess as `meta.lineName` — lowercase line id, e.g. `ic4112`, `l1679`, `s51_785` | A | DONE | `Hop.route_guess`: `route_short_name + trip_short_name`, space only when the route name has digits → `ic830`, `l1679`, `s51 761`. Verified against all 11 practice lines after scorer normalisation. |
 
 ## 8. Phase 6 — The 500 m-out call (metric #6)
 
@@ -249,8 +269,8 @@ Motion lane's endgame work.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| W1 | Warm-start entry point: start station/coords/time → one `source: "warm_start"` anchor | A | TODO | A free, exact anchor — hydration gets much easier. Costs A almost nothing: same contract, one row. |
-| W2 | Confirm route discovery narrows sharply given origin + departure time | A | TODO | Should collapse R1 to a handful of trips. |
+| W1 | Warm-start entry point: start station/coords/time → one `source: "warm_start"` anchor | A | DONE | `solve.py::WarmStart` — only station name, coords, t0. Written as the first anchor. |
+| W2 | Confirm route discovery narrows sharply given origin + departure time | A | DONE | 2–25 candidates per leg (median 4). Timing alone: 41/50. |
 | W3 | **Decide: warm only, or both tracks** | J | TODO | Biggest scope lever left — it decides whether F1–F3 get built at all. Decide before step 4 of the lane plan. |
 
 ### Cold start / first fix (metrics #4, #5) — gated on W3
@@ -270,7 +290,7 @@ Motion lane's endgame work.
 | X3 | Run on `datasets/scoring_release/` immediately at 16h00 | A | TODO | |
 | X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | TODO | |
 | X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | TODO | |
-| X6 | Verify graceful degradation on a **cell-less** leg | M | TODO | Nearly half the data. Exercises H7 — shape-only path must still emit. |
+| X6 | Verify graceful degradation on a **cell-less** leg | M | DONE | All 24 cell-less legs solve and score through the absolute path (empty anchors, schedule-only timing). |
 | X7 | **Ask Steven: will scoring legs come with polylines?** | A | TODO | If yes, submit `latitude,longitude` and let the scorer project — N2/N3 route-picking becomes optional. Ask early; it changes the plan. |
 
 ---
@@ -281,7 +301,9 @@ Motion lane's endgame work.
 |------|----------|-----------|
 | | Team name: **TBD** | Needed for the submission folder name |
 | | Tracks entered: **TBD** | Resolve via W3. |
-| | Language/stack: **TBD** (Python assumed) | |
+| 2026-09-14 | Language/stack: **Python 3.12**, `.venv` via `uv` (no root). numpy/pandas/scipy/shapely | Scorer is Python; `uv` available on the locked-down host. |
+| 2026-09-14 | Submit **`latitude,longitude`**, not `distanceAlongTrackM` | Scorer projects onto its own polyline; we never need the organizers' distance origin (A). |
+| 2026-09-14 | Absolute lane = engineer B | Lane owners: motion = A, absolute = B. |
 | | Lane owners: motion = **TBD**, absolute = **TBD** | Two engineers, two lanes (§0). Put real names here so `Own` column is unambiguous. |
 | 2026-09-14 | Cut the pipeline at `shape.json` + `anchors.json` | Only clean seam between the two lanes; lets each side work against a stub of the other. Contracts in `WORKLOG.md`. |
 
@@ -301,6 +323,12 @@ Still open:
 - Will scoring legs also have cell gaps, in the same ride-wide pattern?
 - Are scoring legs contiguous within a ride? Practice legs are **not** —
   `ic830` has 00,01,02,04,05,06; no 03.
+- **Will scoring leg folder names still embed line + stations**
+  (`ic830_00_kortrijk_ingelmunster`)? If so that is a label leak. We do not
+  read folder names anywhere; ask Steven whether they will be anonymised.
+- Some practice polylines start with an out-and-back spur (`ic2315_00`:
+  GT begins at 2643 m). Harmless for lat/lon submissions; would bite anyone
+  emitting `distanceAlongTrackM`.
 
 ## 11. Findings — per-leg survey (S5)
 

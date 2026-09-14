@@ -1,5 +1,13 @@
 datasets
 starter_kit
+<<<<<<< Updated upstream
 work/
 node_modules/
 dist/
+||||||| Stash base
+=======
+.venv/
+work/
+__pycache__/
+*.pyc
+>>>>>>> Stashed changes

@@ -48,8 +48,13 @@ enough to light the whole screen up. Full folder/file spec: `web/README.md`.
 ## Constraints
 
 - `meta.json` and `ground_truth.csv` are off-limits (labels/leakage) — must
-  localize from raw sensor data + public reference data only.
-- Known start point given per leg.
+  localize from raw sensor data + public reference data only. Warm track
+  exception: `stationFrom`, `coordFrom`, `tFromEpochMillis` are what the
+  organizers hand over, so the warm solver reads exactly those three.
+- Known start point given per leg (warm track).
+- Practice leg *folder names* embed the line and both stations
+  (`ic830_00_kortrijk_ingelmunster`). Nothing reads them — if the scoring set
+  keeps that format it is a label leak we must not build on. Ask Steven.
 
 ## Algorithm
 
@@ -97,6 +102,55 @@ Current plan, subject to revision as pieces get built/tested:
 Open gap in this plan: device orientation. Sensor axes are not track axes and
 the device pose is unknown, so steps 2 and 3 both need an orientation-recovery
 stage before they can use raw accel/gyro axes.
+
+## Absolute lane — what is built and what was learned
+
+Code in `absolute/`, entry point `scripts/run_warm.py`. Scores in `TASKS.md` §0.
+
+- **Distance frame**: `scorer/polylines/<leg>.json` runs `stationFrom` (d=0) →
+  `stationTo` (d≈`routeLengthM`, within 0.5 %). Ground truth can start well
+  past 0 (`ic2315_00` at 2643 m: no GPS for the first 2.6 km). Some polylines
+  contain an out-and-back spur at the start. We sidestep all of it by
+  submitting lat/lon and letting the scorer project.
+- **Leg timing structure** (44 good legs): train starts rolling **~85 s after
+  scheduled departure** (median; range 20–400 s — the platform dwell is inside
+  the leg), arrives ~24 s after scheduled arrival, recording ends ~30 s after
+  arrival. t0 is within ±2 min of scheduled departure, symmetric. Encoded as
+  `LEG_OVERHEAD_S = 110` in the ranking and `DWELL_AFTER_SCHED_S = 85` /
+  `TAIL_AFTER_ARRIVAL_S = 30` in the solver — both are *priors* the motion
+  lane's `moving` flags should replace.
+- **GTFS route discovery** (`absolute/gtfs.py`): active `service_id`s from
+  `calendar_dates`, trips departing the start station ±10 min, every downstream
+  call as a destination candidate (`s51_785_00` really runs De Pinte→Zingem,
+  skipping its scheduled Eke-Nazareth call). Cost = departure offset +
+  1.5×duration mismatch + 120 s per skipped call. **41/50 top-1, 47/50 top-2.**
+  Rejected: asymmetric "leaving early is rare" penalty — t0 is symmetric around
+  the schedule. Unresolvable from timing: same hop, same minute (`ic2035` vs
+  `s33 2963` Antwerpen-Centraal→Berchem) and same-duration opposite directions;
+  cell anchors re-rank the shortlist for the latter.
+- **routeGuess format**: `route_short_name + trip_short_name`, lowercase, space
+  only for S-lines → `ic830`, `l1679`, `s51 761`. Practice `lineName` casing is
+  inconsistent (`IC2315`, `S51 761`) but the scorer normalises.
+- **Station registry** (`absolute/stations.py`): GTFS `stop_id`
+  `gs:nmbssncb:8896008` carries the UIC code = OSM `uic_ref`. Exact join for
+  672/835 stations; the French/Dutch name problem mostly disappears. Fallback:
+  scorer normalisation + order-free token-prefix match (`aspere gavere` ↔
+  `Gavere-Asper`).
+- **Cell join** (`absolute/cells.py`): the LAC-less ambiguity feared earlier is
+  a non-issue — every exact `(radio, cell)` hit is unique. Coverage is the
+  issue: 35 % of distinct ids exact; **eNodeB fallback** (`cellId >> 8`,
+  centroid of sibling cells, radius ≥1.5 km) → 56 %. Whole West-Flanders rides
+  (`ic2315`, `s51_761` early legs) are 0 % either way. On `ic536_02` the
+  anchors contain the true position 87 % of the time; centroid error median
+  931 m — direction-grade, not position-grade.
+- **OSM graph** (`absolute/track.py`): every vertex a node, stitch loose ends
+  ≤8 m → 48 components (from 203), largest 249k nodes. Service/industrial
+  track penalised, not removed. 23/50 legs within 2 % of true length. Known
+  failure: **hairpin reversals** at junctions (same line, path 25–45 % too
+  short). Fix = turn-angle penalty (edge-based dijkstra). Not done.
+- **Our lengths run 1–3 % short** of `routeLengthM` even on good matches —
+  the organizers' polyline is denser through curves. Irrelevant once we
+  submit lat/lon.
 
 ## Data contracts
 
@@ -186,5 +240,5 @@ The absolute side carries the scorer and harness because its signal work is
 smaller and less uncertain — orientation recovery is the single hardest
 unknown, so nothing else stacks on top of it.
 
-Status: idea stage, not yet implemented. Task breakdown + owners in
-`TASKS.md`.
+Status: absolute lane end-to-end (schedule-timed, no IMU); motion lane and
+hydration not started. Task breakdown + owners in `TASKS.md`.
