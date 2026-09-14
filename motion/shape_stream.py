@@ -743,6 +743,8 @@ def main():
     ap.add_argument("--practice-dir", default=os.path.join(repo, "datasets", "practice"))
     ap.add_argument("--out-dir", default=os.path.join(repo, "work"))
     ap.add_argument("--leg", help="leg directory name (prefix match is fine)")
+    ap.add_argument("--legs", nargs="*", metavar="LEG",
+                    help="several leg directory names (prefix match each)")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--no-svg", action="store_true")
@@ -768,10 +770,19 @@ def main():
 
     legs = sorted(d for d in os.listdir(a.practice_dir)
                   if os.path.isdir(os.path.join(a.practice_dir, d)))
+    wanted = list(a.legs or [])
     if a.leg:
-        legs = [d for d in legs if d == a.leg or d.startswith(a.leg)]
-        if not legs:
-            raise SystemExit("no leg matching %r" % a.leg)
+        wanted.append(a.leg)
+    if wanted:
+        # Keep the caller's order, one match per name, no duplicates.
+        picked = []
+        for name in wanted:
+            hit = next((d for d in legs if d == name or d.startswith(name)), None)
+            if hit is None:
+                raise SystemExit("no leg matching %r" % name)
+            if hit not in picked:
+                picked.append(hit)
+        legs = picked
     elif not a.all:
         legs = legs[:1]
     if a.limit:

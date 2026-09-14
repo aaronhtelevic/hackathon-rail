@@ -4,12 +4,15 @@ A small Svelte GUI that watches a folder of algorithm output and renders it as
 it appears. The point is to *see* a solve happen: which lane has produced what,
 where the anchors landed, what the hydration solver did, what the scorer said.
 
-Nothing in here is part of the submission pipeline. The GUI is **read-only** —
-it never writes into the run directory and never triggers an algorithm. The
-algorithms write; the server reads; the browser follows.
+Nothing in here is part of the submission pipeline. The GUI is **read-only
+about run data** — it never writes into a run directory. It can *start* a lane
+runner (see below), but from then on the algorithms write, the server reads and
+the browser follows.
 
 ```
-algorithm (python)  ──writes──▶  work/runs/<run_id>/…  ──reads──▶  node server  ──SSE──▶  Svelte GUI
+             ┌──POST /api/jobs──▶ node server ──spawn──┐
+Svelte GUI ◀─┤                                         ▼
+             └──SSE◀── node server ◀──reads── work/runs/<run_id>/… ◀──writes── algorithm (python)
 ```
 
 ---
@@ -42,8 +45,45 @@ npm start                # build + serve everything on http://localhost:5174
 | `RAIL_GUI_WEB_PORT` | `5173` | Vite dev port |
 | `RAIL_GUI_POLL_MS` | `500` | Change-detection interval |
 | `RAIL_GUI_API` | `http://localhost:5174` | Proxy target for the Vite dev server |
+| `RAIL_GUI_HOST` | `127.0.0.1` | Interface the Node server binds (loopback, because it can spawn runners) |
+| `RAIL_GUI_LAUNCH` | `1` | `0` disables the run launcher — the server is then read-only |
+| `RAIL_PRACTICE_DIR` | `<repo>/datasets/practice` | Where the launcher looks for legs |
+| `RAIL_PYTHON` | `python3` | Interpreter for lanes that don't need `.venv` |
 
 `work/` is gitignored — runs are scratch output, not artifacts.
+
+---
+
+## Starting a run from the GUI
+
+The **New run** panel at the top of the sidebar starts a lane runner, so you
+don't need a second terminal:
+
+1. pick a lane — **motion** (`motion/shape_stream.py`) or **absolute**
+   (`scripts/run_warm_gui.py`),
+2. tick the practice legs to run on (filter box + *all/none*),
+3. optional notes (they show up in the run list),
+4. **run &lt;lane&gt; lane**.
+
+The view jumps to the new run and fills in as the runner writes. One run per
+lane at a time; **stop** sends `SIGTERM` (then `SIGKILL` after 5 s), and the
+server kills any child it still owns when it exits.
+
+What the server will and won't do:
+
+- The two command lines are **fixed in `server.mjs`**. The only client-supplied
+  input is the leg list, and each name must match a directory under
+  `datasets/practice` (with a `sensors.db`) before it becomes an argv item.
+  Nothing goes through a shell.
+- The absolute lane needs `pandas`, so it only runs when `.venv/bin/python`
+  exists at the repo root; otherwise the panel says so instead of failing
+  halfway.
+- Because the server can now run local processes, it binds **127.0.0.1** by
+  default. `RAIL_GUI_HOST=0.0.0.0` opens it up — only do that on a trusted
+  network, or set `RAIL_GUI_LAUNCH=0` to turn the launcher off entirely.
+
+Everything about run *data* stays read-only: `POST` is accepted only on
+`/api/jobs`, and the server never writes into a run directory.
 
 ---
 
@@ -215,10 +255,15 @@ bytes after its cursor.
 | `GET /api/runs/:run/legs/:leg/events?cursor=N` | events after byte `N`, plus the next cursor |
 | `GET /api/runs/:run/legs/:leg/file/:name` | raw file (CSV download links) |
 | `GET /api/osm/:layer` | static reference GeoJSON — `rail-network` or `rail-stations`, read + gzipped once, cached in memory |
-| `GET /api/events` | SSE change stream |
+| `GET /api/events` | SSE stream: file changes, and the launcher's job list |
+| `GET /api/legs` | practice legs available to run on (the picker's source) |
+| `GET /api/jobs` | lane runners this server started, newest first, with a log tail |
+| `POST /api/jobs` | start one: `{lane, legs[], allLegs, notes}` → `{job}` |
+| `POST /api/jobs/:job/cancel` | `SIGTERM` the runner (`SIGKILL` after 5 s) |
 
-Non-GET is refused, every client path is resolved and confined to the runs dir,
-and files over 8 MB are refused rather than buffered.
+`POST` is accepted on `/api/jobs` only; everything else refuses non-GET. Every
+client path is resolved and confined to the runs dir, files over 8 MB are
+refused rather than buffered, and request bodies over 256 kB are dropped.
 
 ---
 
@@ -228,12 +273,13 @@ and files over 8 MB are refused rather than buffered.
 web/
 ├── README.md
 ├── package.json          # dev / build / demo scripts
-├── server/server.mjs     # read-only HTTP + SSE over the runs dir
+├── server/server.mjs     # HTTP + SSE over the runs dir, plus the run launcher
 ├── frontend/             # Vite + Svelte 5
 │   └── src/
 │       ├── App.svelte            # run list, leg list, detail panes
 │       └── lib/
 │           ├── api.js            # fetch + SSE client
+│           ├── RunLauncher.svelte   # lane + leg picker, start/stop, job log
 │           ├── LaneTimeline.svelte   # shape segments + anchors, shared time axis
 │           ├── AnchorMap.svelte      # anchor candidates + hydrated polyline
 │           ├── EventLog.svelte       # events.ndjson tail
@@ -251,5 +297,7 @@ web/
   runs on a hackathon laptop with the wifi off.
 - Timestamps are raw device `epochMillis` everywhere, matching the contracts.
   Clock-drift correction belongs in fusion (**N4**), not here.
+- Starting a run from the GUI turns "follow newest run" off and pins the view
+  to the run you just started.
 - "follow newest run" in the header keeps the view pinned to the most recently
   touched run; turn it off to stay on one while another is running.

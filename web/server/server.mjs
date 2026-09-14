@@ -4,6 +4,7 @@
 // write into. See web/README.md for the on-disk contract.
 
 import http from 'node:http'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -14,8 +15,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..')
 
 const PORT = Number(process.env.RAIL_GUI_PORT ?? 5174)
+// The launcher below runs local processes, so stay on loopback unless told otherwise.
+const HOST = process.env.RAIL_GUI_HOST ?? '127.0.0.1'
 const RUNS_DIR = path.resolve(process.env.RAIL_RUNS_DIR ?? path.join(REPO_ROOT, 'work', 'runs'))
 const STATIC_DIR = path.join(__dirname, '..', 'frontend', 'dist')
+const PRACTICE_DIR = path.resolve(process.env.RAIL_PRACTICE_DIR ?? path.join(REPO_ROOT, 'datasets', 'practice'))
+const LAUNCH_ENABLED = process.env.RAIL_GUI_LAUNCH !== '0'
 const OSM_DIR = path.resolve(process.env.RAIL_OSM_DIR ?? path.join(REPO_ROOT, 'datasets', 'reference_data', 'osm'))
 const POLL_MS = Number(process.env.RAIL_GUI_POLL_MS ?? 500)
 const MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -39,6 +44,233 @@ async function loadOsmLayer (layer) {
 }
 
 fs.mkdirSync(RUNS_DIR, { recursive: true })
+
+// ------------------------------------------------------------------ launcher
+//
+// The viewer stays read-only about run *data* — it never writes into a run
+// directory. It can, however, start the lane runners, which is otherwise the
+// one thing you need a second terminal for. Both commands are fixed here; the
+// only client-controlled input is the leg list, and every name must match a
+// real directory under datasets/practice before it becomes an argv item. No
+// shell is involved at any point.
+
+const LANES = {
+  motion: {
+    label: 'motion lane',
+    script: 'motion/shape_stream.py',
+    needsPandas: false, // stdlib only
+    // shape_stream.py takes --legs A B C, or --all
+    legArgs: (legs, all) => (all ? ['--all'] : ['--legs', ...legs]),
+  },
+  absolute: {
+    label: 'absolute warm solver',
+    script: 'scripts/run_warm_gui.py',
+    needsPandas: true,
+    // run_warm_gui.py defaults to every practice leg when --legs is omitted
+    legArgs: (legs, all) => (all ? [] : ['--legs', ...legs]),
+  },
+}
+
+const VENV_PYTHON = path.join(REPO_ROOT, '.venv', 'bin', 'python')
+const FALLBACK_PYTHON = process.env.RAIL_PYTHON ?? 'python3'
+
+/** Interpreter for a lane, or null when the lane's dependencies are missing. */
+function pythonFor (lane) {
+  if (fs.existsSync(VENV_PYTHON)) return VENV_PYTHON
+  // Refuse rather than fail obscurely three seconds later on `import pandas`.
+  return LANES[lane].needsPandas ? null : FALLBACK_PYTHON
+}
+
+/** Practice legs on disk — the dataset picker's source of truth. */
+async function listLegs () {
+  let entries
+  try { entries = await fsp.readdir(PRACTICE_DIR, { withFileTypes: true }) } catch { return [] }
+  const legs = []
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    let sizeBytes = 0
+    try { sizeBytes = (await fsp.stat(path.join(PRACTICE_DIR, e.name, 'sensors.db'))).size } catch { continue }
+    // ic830_00_kortrijk_ingelmunster -> ride ic830, leg 00, hop "kortrijk ingelmunster"
+    const m = /^([a-z0-9]+)_(\d+)_(.*)$/.exec(e.name)
+    legs.push({
+      leg_id: e.name,
+      ride: m ? m[1] : e.name,
+      index: m ? Number(m[2]) : null,
+      hop: m ? m[3].replace(/_/g, ' ') : '',
+      sizeBytes,
+    })
+  }
+  legs.sort((a, b) => a.leg_id.localeCompare(b.leg_id))
+  return legs
+}
+
+const jobs = new Map() // job_id -> record
+const MAX_LOG_LINES = 300
+
+const publicJob = j => ({
+  job_id: j.job_id,
+  lane: j.lane,
+  run_id: j.run_id,
+  legs: j.legs,
+  allLegs: j.allLegs,
+  notes: j.notes,
+  cmd: j.cmd,
+  state: j.state,
+  startedAt: j.startedAt,
+  finishedAt: j.finishedAt,
+  exitCode: j.exitCode,
+  error: j.error,
+  log: j.log,
+})
+
+const jobList = () => [...jobs.values()].sort((a, b) => b.startedAt - a.startedAt).map(publicJob)
+
+function announceJobs () {
+  broadcast({ type: 'jobs', jobs: jobList(), at: Date.now() })
+}
+
+function stamp () {
+  const d = new Date()
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+function appendLog (job, stream, chunk) {
+  for (const line of chunk.toString('utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue
+    job.log.push({ at: Date.now(), stream, line: line.slice(0, 500) })
+  }
+  if (job.log.length > MAX_LOG_LINES) job.log = job.log.slice(-MAX_LOG_LINES)
+}
+
+/** Thrown for anything the user can fix by picking differently. */
+class LaunchError extends Error {
+  constructor (status, message) { super(message); this.status = status }
+}
+
+/** Spawn one lane runner. */
+async function startJob ({ lane, legs, allLegs, notes }) {
+  if (!LAUNCH_ENABLED) throw new LaunchError(403, 'launching is disabled (RAIL_GUI_LAUNCH=0)')
+  const spec = LANES[lane]
+  if (!spec) throw new LaunchError(400, `unknown lane ${JSON.stringify(lane)}`)
+
+  for (const j of jobs.values()) {
+    if (j.lane === lane && j.state === 'running') {
+      throw new LaunchError(409, `the ${spec.label} is already running (${j.run_id})`)
+    }
+  }
+
+  // Whitelist against the filesystem: a leg id is only ever a directory name.
+  const known = new Set((await listLegs()).map(l => l.leg_id))
+  const picked = []
+  for (const legId of legs ?? []) {
+    if (!known.has(legId)) throw new LaunchError(400, `no such practice leg: ${legId}`)
+    if (!picked.includes(legId)) picked.push(legId)
+  }
+  if (!allLegs && !picked.length) throw new LaunchError(400, 'pick at least one leg')
+
+  const python = pythonFor(lane)
+  if (!python) {
+    throw new LaunchError(412, `the ${spec.label} needs pandas — create .venv at the repo root first`)
+  }
+
+  const runId = `${stamp()}-${lane}`
+  const args = [spec.script, '--run-id', runId, ...spec.legArgs(picked, allLegs)]
+  if (notes) args.push('--notes', String(notes).slice(0, 300))
+
+  const job = {
+    job_id: runId,
+    lane,
+    run_id: runId,
+    legs: allLegs ? [...known].sort() : picked,
+    allLegs: Boolean(allLegs),
+    notes: notes || null,
+    cmd: [python, ...args].join(' '),
+    state: 'running',
+    startedAt: Date.now(),
+    finishedAt: null,
+    exitCode: null,
+    error: null,
+    log: [],
+    child: null,
+  }
+
+  let child
+  try {
+    child = spawn(python, args, {
+      cwd: REPO_ROOT,
+      env: { ...process.env, RAIL_RUNS_DIR: RUNS_DIR, PYTHONUNBUFFERED: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (err) {
+    throw new LaunchError(500, `could not start ${python}: ${err.message}`)
+  }
+  job.child = child
+  job.pid = child.pid
+  jobs.set(job.job_id, job)
+
+  child.stdout.on('data', c => { appendLog(job, 'out', c); announceJobs() })
+  child.stderr.on('data', c => { appendLog(job, 'err', c); announceJobs() })
+  child.on('error', err => {
+    job.state = 'error'
+    job.error = String(err.message ?? err)
+    job.finishedAt = Date.now()
+    job.child = null
+    announceJobs()
+  })
+  child.on('close', (code, signal) => {
+    if (job.state !== 'error') {
+      job.state = job.cancelled ? 'cancelled' : code === 0 ? 'done' : 'error'
+      if (code !== 0 && !job.cancelled) job.error = signal ? `killed by ${signal}` : `exit code ${code}`
+    }
+    job.exitCode = code
+    job.finishedAt = Date.now()
+    job.child = null
+    announceJobs()
+  })
+
+  announceJobs()
+  return job
+}
+
+function cancelJob (jobId) {
+  const job = jobs.get(jobId)
+  if (!job) return null
+  if (job.child) {
+    job.cancelled = true
+    job.child.kill('SIGTERM')
+    const child = job.child
+    setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }, 5000).unref?.()
+  }
+  return job
+}
+
+/** Read a JSON request body, with a hard size cap. */
+function readJsonBody (req, limit = 256 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', c => {
+      size += c.length
+      if (size > limit) { reject(new LaunchError(413, 'body too large')); req.destroy() }
+      else chunks.push(c)
+    })
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim()
+      if (!text) return resolve({})
+      try { resolve(JSON.parse(text)) } catch (err) { reject(new LaunchError(400, `bad JSON body: ${err.message}`)) }
+    })
+    req.on('error', reject)
+  })
+}
+
+// Don't leave orphaned runners behind when the server goes down.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    for (const job of jobs.values()) job.child?.kill('SIGTERM')
+    process.exit(0)
+  })
+}
 
 // ---------------------------------------------------------------- utilities
 
@@ -207,7 +439,7 @@ async function handleApi (req, res, url) {
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     })
-    res.write(`data: ${JSON.stringify({ type: 'hello', runsDir: RUNS_DIR })}\n\n`)
+    res.write(`data: ${JSON.stringify({ type: 'hello', runsDir: RUNS_DIR, jobs: jobList() })}\n\n`)
     sseClients.add(res)
     const ping = setInterval(() => { try { res.write(': ping\n\n') } catch { /* closed */ } }, 20000)
     req.on('close', () => { clearInterval(ping); sseClients.delete(res) })
@@ -226,6 +458,35 @@ async function handleApi (req, res, url) {
     }
     res.writeHead(200, { ...headers, 'content-length': entry.raw.length })
     return res.end(entry.raw)
+  }
+
+  // GET /api/legs  — practice legs available to run on
+  if (seg.length === 2 && seg[1] === 'legs' && req.method === 'GET') {
+    return sendJson(res, 200, { practiceDir: PRACTICE_DIR, legs: await listLegs() })
+  }
+
+  // GET /api/jobs  — lane runners started from this server
+  if (seg.length === 2 && seg[1] === 'jobs' && req.method === 'GET') {
+    return sendJson(res, 200, { enabled: LAUNCH_ENABLED, jobs: jobList() })
+  }
+
+  // POST /api/jobs  {lane, legs[], allLegs, notes}  — start a run
+  if (seg.length === 2 && seg[1] === 'jobs' && req.method === 'POST') {
+    const body = await readJsonBody(req)
+    const job = await startJob({
+      lane: body.lane,
+      legs: Array.isArray(body.legs) ? body.legs.map(String) : [],
+      allLegs: Boolean(body.allLegs),
+      notes: body.notes,
+    })
+    return sendJson(res, 201, { job: publicJob(job) })
+  }
+
+  // POST /api/jobs/:jobId/cancel
+  if (seg.length === 4 && seg[1] === 'jobs' && seg[3] === 'cancel' && req.method === 'POST') {
+    const job = cancelJob(seg[2])
+    if (!job) return sendJson(res, 404, { error: 'no such job', job_id: seg[2] })
+    return sendJson(res, 200, { job: publicJob(job) })
   }
 
   // GET /api/runs
@@ -317,21 +578,30 @@ async function serveStatic (req, res, url) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
   res.setHeader('access-control-allow-origin', '*')
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return sendJson(res, 405, { error: 'read-only server' })
+  res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
+  res.setHeader('access-control-allow-headers', 'content-type')
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end() }
+  // Run data is read-only; POST exists only for the launcher (/api/jobs).
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') {
+    return sendJson(res, 405, { error: 'method not allowed' })
+  }
+  if (req.method === 'POST' && !url.pathname.startsWith('/api/jobs')) {
+    return sendJson(res, 405, { error: 'read-only except /api/jobs' })
   }
   const done = url.pathname.startsWith('/api/')
     ? handleApi(req, res, url)
     : serveStatic(req, res, url)
   Promise.resolve(done).catch(err => {
-    console.error('[server]', err)
-    if (!res.headersSent) sendJson(res, 500, { error: String(err.message ?? err) })
+    if (!err?.status) console.error('[server]', err)
+    if (!res.headersSent) sendJson(res, err?.status ?? 500, { error: String(err.message ?? err) })
     else res.end()
   })
 })
 
-server.listen(PORT, () => {
-  console.log(`rail-gui server  http://localhost:${PORT}`)
+server.listen(PORT, HOST, () => {
+  console.log(`rail-gui server  http://${HOST}:${PORT}`)
   console.log(`  runs dir       ${RUNS_DIR}`)
+  console.log(`  practice       ${PRACTICE_DIR}`)
   console.log(`  static         ${STATIC_DIR}`)
+  console.log(`  launcher       ${LAUNCH_ENABLED ? `enabled (python: ${pythonFor('motion') ?? 'none'})` : 'disabled'}`)
 })

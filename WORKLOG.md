@@ -40,20 +40,36 @@ solve as it happens — per-leg status, `shape.json` segments and `anchors.json`
 candidates on one time axis, hydrated polyline over the anchor circles (with an
 OSM rail layer under it), the `events.ndjson` tail and `score.json`.
 
-Read-only by design: algorithms write files, the GUI only reads. Nothing in it
-is part of the submission pipeline, and the folder contract is exactly the
-`shape.json`/`anchors.json` contracts below. Full folder/file spec:
-`web/README.md`.
+Read-only about run *data*: algorithms write files, the GUI only reads them.
+It can **start a lane runner** — the "New run" panel picks a lane and a set of
+practice legs and spawns `motion/shape_stream.py` or
+`scripts/run_warm_gui.py` — so a solve no longer needs a second terminal. The
+command lines live in the server; the only client input is the leg list, and
+each name must match a real `datasets/practice/<leg>/sensors.db` before it
+becomes an argv item. Because it spawns processes the server binds loopback
+(`RAIL_GUI_HOST` to change, `RAIL_GUI_LAUNCH=0` to disable).
+
+Nothing in it is part of the submission pipeline, and the folder contract is
+exactly the `shape.json`/`anchors.json` contracts below. Full folder/file
+spec: `web/README.md`.
 
 Note the two directories: `work/<leg_id>/` holds the **lane contracts** that
 hydration consumes; `work/runs/<run_id>/<leg_id>/` is the viewer's copy. Both
 lanes write both.
 
 ```bash
-python3 motion/shape_stream.py --all          # motion lane  → work/runs/<ts>-motion-lane/
-python3 scripts/run_warm_gui.py               # absolute lane → work/runs/<ts>-warm/
-cd web && npm run install:all && npm run dev  # GUI :5173, API :5174
+cd web && npm run install:all && npm run dev  # GUI :5173, API :5174 — then use "New run"
 ```
+
+Or from a shell, same thing:
+
+```bash
+python3 motion/shape_stream.py --all           # motion lane   → work/runs/<ts>-motion-lane/
+.venv/bin/python scripts/run_warm_gui.py       # absolute lane → work/runs/<ts>-absolute-warm/
+```
+
+Both runners take `--legs A B C` (leg directory names, prefix match on the
+motion side) and `--run-id`, which is how the GUI names the run it starts.
 
 `shape_stream.py --no-gui` skips the run directory. Segment-close events go
 into `events.ndjson` as each segment closes, so the timeline fills in while the
