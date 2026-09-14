@@ -79,7 +79,13 @@ def main():
                 motion_run_leg(str(paths.PRACTICE), leg, str(paths.WORK), run=run,
                                demo_speed=a.demo_speed)
                 info = solve.solve_warm(leg, a.team, ws=ws, gui=lw, sub_track=tr)
-            rep = harness.score(leg, tr, paths.WORK / "submissions" / a.team / tr / leg)
+            try:
+                rep = harness.score(leg, tr, paths.WORK / "submissions" / a.team / tr / leg)
+            except Exception as e:  # scoring-release legs ship no ground truth to score against
+                lw.event("I3", f"no score: {type(e).__name__}: {e}", level="warn", pct=1.0)
+                lw.done("no ground truth to score against")
+                print(f"{leg[:44]:44s} {info['hop']}  -> no ground truth")
+                continue
             lw.score(rep)
             f = harness.flatten(rep)
             lw.event("I3", f"median err {f['medErrM']} m, route {f['route']} "
