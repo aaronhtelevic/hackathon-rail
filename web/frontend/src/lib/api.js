@@ -30,6 +30,8 @@ export const exportUrl = (runId, team = 'televic') =>
 
 // --- launcher ---------------------------------------------------------------
 export const listLegs = () => getJson('/api/legs')
+/** Practice-only groundtruth track: {leg_id, points: [{t, lat, lon}]}. */
+export const getGroundTruth = legId => getJson(`/api/legs/${encodeURIComponent(legId)}/groundtruth`)
 export const listJobs = () => getJson('/api/jobs')
 /** opts: {lane, legs[], allLegs, notes, demoSpeed, cold} */
 export const startRun = opts => postJson('/api/jobs', opts)

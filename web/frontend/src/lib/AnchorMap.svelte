@@ -5,11 +5,12 @@
   import 'leaflet/dist/leaflet.css'
   import { getOsmLayer } from './api.js'
 
-  let { anchors = null, hydrated = null, shape = null, legId = null } = $props()
+  let { anchors = null, hydrated = null, shape = null, legId = null, groundTruth = null } = $props()
 
   const list = $derived(anchors?.anchors ?? [])
   const poly = $derived(hydrated?.polyline ?? [])
   const segments = $derived(shape?.segments ?? [])
+  const truth = $derived(groundTruth ?? [])
 
   let el
   let map
@@ -130,11 +131,31 @@
       }
     }
 
+    if (truth.length > 1) {
+      const truthLine = truth.map(p => [p.lat, p.lon])
+      bounds.push(...truthLine)
+      L.polyline(truthLine, { color: '#2ecc71', weight: 3, opacity: 0.8, dashArray: '4 4' }).addTo(layer)
+    }
+
     let liveFix = null
     if (poly.length > 1) {
       const line = poly.map(p => [p.lat ?? p[0], p.lon ?? p[1]])
       bounds.push(...line)
       L.polyline(line, { color: 'var(--joint)', weight: 5, lineJoin: 'round' }).addTo(layer)
+
+      const lastT = poly[poly.length - 1].t ?? poly[poly.length - 1].time
+      if (truth.length) {
+        let nearest = null; let bestDelta = Infinity
+        for (const p of truth) {
+          const d = Math.abs(p.t - lastT)
+          if (d < bestDelta) { bestDelta = d; nearest = p }
+        }
+        if (nearest) {
+          L.circleMarker([nearest.lat, nearest.lon], {
+            radius: 8, color: '#fff', weight: 2, fillColor: '#2ecc71', fillOpacity: 1,
+          }).bindTooltip('groundtruth location at current time').addTo(layer)
+        }
+      }
 
       liveFix = line[line.length - 1]
       L.circleMarker(liveFix, {
@@ -175,7 +196,7 @@
     }
   }
 
-  $effect(() => { list; poly; segments; draw() })
+  $effect(() => { list; poly; segments; truth; draw() })
 </script>
 
 {#if !list.length && poly.length < 2}
@@ -191,6 +212,7 @@
 <p class="dim scalebar">
   {list.length} anchor{list.length === 1 ? '' : 's'} ·
   {poly.length} hydrated point{poly.length === 1 ? '' : 's'} ·
+  {#if truth.length}{truth.length} groundtruth point{truth.length === 1 ? '' : 's'} (green, dashed) ·{/if}
   circle radius = anchor uncertainty
 </p>
 

@@ -1,5 +1,5 @@
 <script>
-  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, exportUrl, listJobs, watchChanges, clearRuns } from './lib/api.js'
+  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, exportUrl, listJobs, watchChanges, clearRuns, getGroundTruth } from './lib/api.js'
   import RunLauncher from './lib/RunLauncher.svelte'
   import LaneTimeline from './lib/LaneTimeline.svelte'
   import AnchorMap from './lib/AnchorMap.svelte'
@@ -12,6 +12,7 @@
   let runs = $state([])
   let run = $state(null)            // full run detail (legs + status)
   let leg = $state(null)            // full leg detail (shape/anchors/score)
+  let groundTruth = $state(null)    // practice-only: [{t, lat, lon}] from ground_truth.csv
   let selectedRun = $state(null)
   let selectedLeg = $state(null)
   let events = $state([])
@@ -87,7 +88,12 @@
 
   async function selectLeg (legId) {
     selectedLeg = legId
-    await Promise.all([refreshLeg(), pullEvents(true)])
+    groundTruth = null
+    await Promise.all([
+      refreshLeg(),
+      pullEvents(true),
+      getGroundTruth(legId).then(r => (groundTruth = r.points)).catch(() => (groundTruth = null)),
+    ])
   }
 
   // Map a changed run-dir relative path onto the refreshes it invalidates.
@@ -230,7 +236,7 @@
       <div class="snap-section geometry-group">
         <div class="panel">
           <h2>Geometry</h2>
-          <AnchorMap anchors={leg?.anchors} hydrated={leg?.hydrated} shape={leg?.shape} legId={selectedLeg} />
+          <AnchorMap anchors={leg?.anchors} hydrated={leg?.hydrated} shape={leg?.shape} legId={selectedLeg} {groundTruth} />
         </div>
 
         <div class="panel">

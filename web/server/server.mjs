@@ -557,6 +557,28 @@ async function handleApi (req, res, url) {
     return sendJson(res, 200, { practiceDir: PRACTICE_DIR, legs: await listLegs() })
   }
 
+  // GET /api/legs/:legId/groundtruth  — practice-only ground_truth.csv, when present
+  if (seg.length === 4 && seg[1] === 'legs' && seg[3] === 'groundtruth') {
+    const legId = seg[2]
+    const known = new Set((await listLegs()).map(l => l.leg_id))
+    if (!known.has(legId)) return sendJson(res, 404, { error: 'no such practice leg', leg_id: legId })
+    const file = path.join(PRACTICE_DIR, legId, 'ground_truth.csv')
+    let text
+    try { text = await fsp.readFile(file, 'utf8') } catch { return sendJson(res, 200, { leg_id: legId, points: [] }) }
+    const lines = text.split(/\r?\n/).filter(Boolean)
+    const header = lines.shift()?.split(',') ?? []
+    const iT = header.indexOf('epochMillis')
+    const iLon = header.indexOf('longitude')
+    const iLat = header.indexOf('latitude')
+    const points = []
+    for (const line of lines) {
+      const cols = line.split(',')
+      const t = Number(cols[iT]); const lon = Number(cols[iLon]); const lat = Number(cols[iLat])
+      if (Number.isFinite(t) && Number.isFinite(lon) && Number.isFinite(lat)) points.push({ t, lat, lon })
+    }
+    return sendJson(res, 200, { leg_id: legId, points })
+  }
+
   // GET /api/jobs  — lane runners started from this server
   if (seg.length === 2 && seg[1] === 'jobs' && req.method === 'GET') {
     return sendJson(res, 200, { enabled: LAUNCH_ENABLED, jobs: jobList() })
