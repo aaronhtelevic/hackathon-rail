@@ -15,20 +15,33 @@ Status key: `TODO` · `WIP` · `DONE` · `BLOCKED` · `DROPPED`
 
 ## 0. Where we are
 
-**Both lanes are implemented end-to-end and independent.**
+**Both lanes are implemented and joined: hydration (Phase 3) is live.**
 
 *Absolute* (`absolute/`, run with `.venv/bin/python scripts/run_warm.py`):
 no IMU used — GTFS picks the train and destination, OSM gives the path, a
 schedule-timed trapezoid gives position, and the 500 m-out call falls out of
 the same profile. Scores on the 50 practice legs (44 good-GT):
 
-| metric | baseline (`ic830_00` only) | absolute-only, all legs |
-|---|---|---|
-| position, median-of-medians (good GT) | 974 m | **324 m** (mean-of-medians 687 m) |
-| route correct / lock-in | — | **44/50**, 0 s |
-| station call detected / median \|timing\| | 0/1 | **40/50**, 17 s — the 6 misses with a correct route are **unscoreable** (500 m reference moment falls in a GT gap) |
+| metric | baseline (`ic830_00` only) | absolute-only, all legs | **+ hydration (Phase 3)** |
+|---|---|---|---|
+| position, median-of-medians (good GT) | 974 m | 324 m (mean-of-medians 687 m) | **202 m** (mean 470 m) |
+| route correct / lock-in | — | 44/50, 0 s | **47/50**, 0 s |
+| station call detected / median \|timing\| | 0/1 | 40/50, 17 s | **42/50**, 19 s — the 7 misses with a correct route are **unscoreable** (500 m reference moment falls in a GT gap) |
 
-Where the remaining error sits, in order: (1) 6 wrong GTFS picks — 3 are
+*Hydration* (`absolute/hydrate.py`, joint, 2026-09-14 13h): the shape's
+segment boundaries are fitted onto the candidate OSM path by exact DP —
+turns pin, believed stops hold, cell anchors and the schedule trapezoid pull
+weakly. The same fit cost, per segment, re-ranks the GTFS shortlist: the IMU
+turn sequence tells opposite directions apart where timing cannot
+(`ic2809_03`, `ic4112_00` fixed). Remaining route misses: 2 same-hop/same-minute
+pairs (`ic2035`/`s33 2963`, `ic3033`/`ic2633`) and `l1679_02` (timing prefers
+the wrong direction by 253 s; shape prefers the right one, but weighting it
+enough to win there flips `ic2809_04`). Biggest remaining position errors are
+legs where the stationary detector misses the platform dwell entirely
+(`ic3013_03`: one 235 s "moving" straight covering the dwell) — the schedule
+prior is what saves those.
+
+Absolute-only picture (kept for reference): where its error sat: (1) 6 wrong GTFS picks — 3 are
 same-destination/same-hop pairs nothing in this leg can separate
 (`ic2035`/`s33 2963`, `ic536`/`s2 3785`, `ic3033`/`ic2633`), 3 are
 opposite-direction pairs on **cell-less** legs (`ic2809_03`, `l1679_02`,
@@ -52,10 +65,14 @@ makes sense, because both files feed the one hydration step that snaps to
 OSM; `motion/shape_stream.py` and `scripts/run_warm_gui.py` still run
 stand-alone from a shell for lane-local debugging, but the web GUI's "New
 run" panel only launches the joint script now. Phase 3 (hydration, §5) is
-the next real work: it is what turns the shape into scale-correct position
-and what lets cell anchors re-rank the GTFS shortlist. Hydration (H3–H7) not
-started — the joint runner produces both contract files together, it does
-not yet join them.
+what turns the shape into scale-correct position and lets cell anchors and
+the turn sequence re-rank the GTFS shortlist. **Hydration (H3–H7) is done**
+— `solve_warm` reads `work/<leg>/shape.json` when present and falls back to
+the schedule trapezoid otherwise (`NO_HYDRATE=1` env var forces the fallback
+for A/B runs). Note `motion_window` no longer reads the shape's first/last
+`moving` segment: that made the trapezoid *worse* (324 → 530 m) because the
+first flicker fires long before the train rolls; hydration consumes the flags
+properly instead.
 
 **Decision taken (A):** we submit **`latitude,longitude`**, not
 `distanceAlongTrackM`. The scorer projects onto its own polyline, so we never
@@ -233,11 +250,11 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 |----|------|-----|--------|-------|
 | H1 | Write `anchors.json`: cell + wifi estimates as multi-hypothesis candidates with radius | A | DONE | `absolute/anchors.py`. 10 s bins, multi-candidate. On `ic536_02`: 108 anchors, 87 % contain the true position within radius, centroid error median 931 m — cell is coarse. |
 | H2 | Segment length prior from IMU: speed estimate | M | DONE (weak) | Accel integration and vibration energy both **fail** (see `WORKLOG.md` → Motion lane). What works: `v = a_lat/omega` in curves + gyro-derived cant correction → median 39% speed error, **turns only**. Dead-reckoned leg length: median 39% error, p90 71%. Scale must come from anchors/GTFS. |
-| H3 | Stopped-vs-moving resolution per straight segment | J | TODO | M2's `moving` flag proposes, anchors ± radius confirm. Radius width gates confidence. |
-| H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | TODO | **Pair on this.** Start with least-squares / monotone fit before reaching for a particle filter. |
-| H5 | Per-segment confidence out of the solver | J | TODO | Feeds fusion weighting (N3) and the lock-in policy (R4). |
-| H6 | Output: hydrated polyline + `distance-along-time` curve | J | TODO | The artifact Phase 4 snaps. |
-| H7 | No-anchor fallback: leg with zero cell **and** useless wifi | J | TODO | 24/50 legs. H2 prior + GTFS timing is all there is. Don't discover this at 16h05 (→ X6). |
+| H3 | Stopped-vs-moving resolution per straight segment | J | DONE | `absolute/hydrate.py::_believed_stops`. A `moving:false` segment gets the stop penalty when ≥15 s, or when the ±20 s window around it is ≥50 % stopped (platform-dwell flicker); 2–5 s flicker at 25 m/s (`ic536_02`) is treated as moving. Penalty, not constraint — turns/anchors can overrule. |
+| H4 | Hydration solver: assign lengths so the shape fits all anchors within their radii | J | DONE | `absolute/hydrate.py::hydrate` — exact DP on a ≤1600-cell distance grid. Costs in metres-of-penalty: turn match (50 m/deg beyond a 3° + drift deadband), stop (3/m), speed prior to mean moving speed (0.1/m) + IMU curve speed (0.1/m), cell anchors (0.5/m outside radius, capped 1 km), schedule trapezoid prior (0.3/m, capped 1 km), start/end slack. Hairpin artefacts in the OSM heading (>15°/25 m) are dropped. Practice warm: **324 → 202 m** median-of-medians, 687 → 470 m mean. |
+| H5 | Per-segment confidence out of the solver | J | DONE | `sigma_m` per knot from forward+backward DP (softmin, T=150 m). Written to `hydrated.json` knots; not yet used downstream. |
+| H6 | Output: hydrated polyline + `distance-along-time` curve | J | DONE | `work/<leg>/hydrated.json` (`knots[{t,distance_m,sigma_m}]`, cost, notes) + the GUI `hydrated.json` polyline with `knots`. `solve_warm` samples the curve every 5 s for `position.csv`; the 500 m-out call is the curve crossing L−500. |
+| H7 | No-anchor fallback: leg with zero cell **and** useless wifi | J | DONE | Zero anchors is just fewer DP terms; the schedule prior + turns/stops carry it. Verified: all 24 cell-less legs solve; `ic2809_05` 1361 → 180 m with no anchors. |
 
 ## 6. Phase 4 — Map matching & fusion (`WORKLOG.md` step 6) → metric #3
 
@@ -245,7 +262,7 @@ on, not split — this is where the idea lives and a bad hand-off costs most.
 |----|------|-----|--------|-------|
 | N1 | Stitch the OSM graph into routable components | A | WIP | Stitching done (I2). Remaining failures are **hairpin reversals** at junctions (Zedelgem↔Torhout 7.8 vs 10.4 km, Antwerpen-Zuid↔Linkeroever 3.1 vs 5.4 km) — same OSM line, physically impossible turn. Needs turn-angle penalties (edge-based dijkstra). |
 | N2 | Precompute curvature signature per candidate OSM route | A | TODO | What M1's turn sequence gets matched against. Build it to consume `shape.json` directly. |
-| N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | J | TODO | Weight by H5. Track-constrained, so 1-D once the route is picked. |
+| N3 | Match hydrated shape → OSM route + offset; emit `distanceAlongTrackM` | J | DONE | Folded into hydration: the fit *is* the snap — knots are distances along the chosen OSM path, emitted as lat/lon (scorer projects). `sigma_m` (H5) not yet weighted in. |
 | N4 | Clock-drift handling between device `epochMillis` and GTFS wall-clock | A | DONE | Measured, not corrected: t0 sits within ±2 min of scheduled departure on all legs, symmetric. No clock-drift term needed at this accuracy. |
 | N5 | Align to GTFS timetable (arrival times along the matched route) | A | DONE | Folded into `absolute/gtfs.py::rank_hops` + `absolute/solve.py::motion_window`: scheduled dep/arr define the timing prior. |
 | N6 | Tunnel / long-gap behaviour — keep emitting sane estimates | J | TODO | GT has >60 s gaps; we still have to output rows. |

@@ -46,7 +46,7 @@ HEADING_SMOOTH_M = 150.0
 MAX_TURN_DEG_PER_25M = 15.0    # a real rail curve never bends faster (r > ~100 m); anything sharper
                                # is an OSM hairpin/reversal artifact (N1) and is dropped from the signature
 
-W_TURN = 25.0                  # m of penalty per degree of turn mismatch beyond the deadband
+W_TURN = 50.0                  # m of penalty per degree of turn mismatch beyond the deadband
 TURN_DEADBAND_DEG = 3.0
 TURN_DRIFT_DEG_PER_S = 0.01    # gyro bias residual, widens the deadband on long segments
 W_STOP = 3.0                   # per metre moved during a "stopped" segment
@@ -54,10 +54,15 @@ STOP_TRUST_MIN_S = 15.0        # a "stopped" segment this long is believed outri
 STOP_FRAC_WINDOW_S = 40.0      # shorter ones: believed only if the surrounding window is mostly stopped
 STOP_FRAC_MIN = 0.5            # (ic536_02 flickers 2–5 s stops at 25 m/s -> frac ~0.35 -> moving;
                                #  ic2035_00 platform dwell flickers too but frac ~0.6 -> stopped)
-W_SPEED = 0.25                 # per metre of deviation from mean moving speed
+W_SPEED = 0.10                 # per metre of deviation from mean moving speed
 W_IMU = 0.10                   # per metre of deviation from the curve-derived speed prior
-W_ANCHOR = 0.50                # per metre a cell anchor sits outside its radius
+W_ANCHOR = 0.50                # per metre a cell anchor sits outside its radius ...
+ANCHOR_CAP_M = 1000.0          # ... capped: one wrong eNodeB centroid must not outweigh the turns
 W_SLACK = 0.5                  # per metre of start/end slack beyond the free band
+W_PRIOR = 0.3                  # per metre a knot deviates from the caller's timing prior (the
+                               # schedule trapezoid): the IMU shape is blind to *when* the leg runs ...
+PRIOR_CAP_M = 1000.0           # ... capped, so a wrong schedule cannot drag well-pinned turns
+                               # (ic2315_06: uncapped prior 157 -> 2386 m)
 SIGMA_TEMP_M = 150.0           # softmin temperature for the confidence posterior
 
 
@@ -141,7 +146,7 @@ def _anchor_cost_on_grid(pg: PathGrid, anchor: dict) -> np.ndarray:
         cx, cy = geo.to_xy(c["lon"], c["lat"], pg.lat0)
         out = np.maximum(0.0, np.hypot(pg.x - cx, pg.y - cy) - c["radius_m"])
         best = np.minimum(best, out)
-    return best
+    return np.minimum(best, ANCHOR_CAP_M)
 
 
 def _believed_stops(tau: np.ndarray, moving: np.ndarray) -> np.ndarray:
@@ -162,7 +167,10 @@ def _believed_stops(tau: np.ndarray, moving: np.ndarray) -> np.ndarray:
 
 # --------------------------------------------------------------------------- the DP
 
-def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path) -> Hydrated:
+def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path,
+            prior_distance_at=None) -> Hydrated:
+    """`prior_distance_at(t_ms array) -> distance array` is an optional weak timing prior
+    (absolute lane: the GTFS-timed trapezoid) applied at every segment boundary."""
     segs = [s for s in shape.get("segments", []) if s["t_end"] > s["t_start"]]
     if not segs:
         raise ValueError("shape has no segments")
@@ -209,8 +217,12 @@ def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path) -> Hydrated:
         return c
 
     K = len(segs)
+    unary = np.zeros((K + 1, J))                       # per-knot prior cost
+    if prior_distance_at is not None:
+        dev = np.abs(pg.d[None, :] - np.asarray(prior_distance_at(tau), dtype=float)[:, None])
+        unary = W_PRIOR * np.minimum(dev, PRIOR_CAP_M)
     F = np.full((K + 1, J), np.inf)
-    F[0] = W_SLACK * np.maximum(0.0, pg.d - START_SLACK_M)
+    F[0] = W_SLACK * np.maximum(0.0, pg.d - START_SLACK_M) + unary[0]
     B = np.full((K + 1, J), np.inf)
     B[K] = W_SLACK * np.maximum(0.0, np.abs(pg.d - L) - END_SLACK_M)
     arg = np.zeros((K + 1, J), dtype=int)
@@ -218,10 +230,11 @@ def hydrate(shape: dict, anchor_doc: dict | None, path: track.Path) -> Hydrated:
     for k in range(K):
         tot = F[k][:, None] + costs[k]                 # rows j', cols j
         arg[k + 1] = np.argmin(tot, axis=0)
-        F[k + 1] = tot[arg[k + 1], idx]
+        F[k + 1] = tot[arg[k + 1], idx] + unary[k + 1]
     for k in range(K - 1, -1, -1):
-        tot = costs[k] + B[k + 1][None, :]
+        tot = costs[k] + (B[k + 1] + unary[k + 1])[None, :]
         B[k] = tot.min(axis=1)
+    # F[k] includes unary[k]; B[k] excludes it, so F + B counts each knot once
 
     # optimum by traceback from the best final knot
     j = int(np.argmin(F[K] + B[K]))

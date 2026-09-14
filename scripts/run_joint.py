@@ -5,8 +5,8 @@ both ways at once -- there is no standalone "motion run" or "absolute run"
 anymore. Per leg, in order:
   1. motion.shape_stream.run_leg()  -> work/<leg>/shape.json
   2. absolute.solve.solve_warm()    -> work/<leg>/anchors.json + submission
-     (solve_warm's motion_window() reads shape.json written in step 1, so
-     the order is load-bearing, not incidental)
+     (solve_warm hydrates shape.json written in step 1 onto the OSM path —
+     absolute/hydrate.py — so the order is load-bearing, not incidental)
 Both write into the same RunWriter leg entry (lane="joint" by default), so
 the viewer shows shape + anchors + hydrated + score together per leg.
 

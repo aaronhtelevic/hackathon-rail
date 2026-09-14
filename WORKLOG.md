@@ -152,7 +152,7 @@ Current plan, subject to revision as pieces get built/tested:
 Former open gap in this plan — device orientation — is **closed**: the up axis
 alone (slow accelerometer EMA) carries turn detection, and the lateral/forward
 axes fall out of regressing horizontal accel on yaw rate. See the motion lane
-section. The remaining open piece is step 3, hydration.
+section. Step 3, hydration, is built — see the section below.
 
 ## Absolute lane — what is built and what was learned
 
@@ -242,6 +242,57 @@ practice legs.
   curves have no speed evidence at all (`speed_source: "default"`, a flat
   22 m/s guess). Scale has to come from anchors + GTFS hop duration in
   hydration. The *topology* is the part to trust.
+
+## Hydration — what is built and what was learned (step 3, joint)
+
+Code: `absolute/hydrate.py`, called from `absolute/solve.py::solve_warm` and
+`choose_hop`. Output: `work/<leg>/hydrated.json`. Dev A/B: `NO_HYDRATE=1`.
+
+- **Formulation that worked first time**: exact dynamic programming, not a
+  particle filter. Unknowns are the path distances at the shape's segment
+  boundaries (monotone, start at 0, end near path length); the grid is ≤1600
+  cells (25 m, coarser on long legs); one (J×J) cost matrix per segment. A
+  50-segment, 25 km leg solves in ~1 s. Every cost is "metres of penalty" so
+  the weights are exchange rates and easy to reason about.
+- **Turns are the pins, exactly as hoped.** The path's smoothed, unwrapped
+  bearing change over a segment must match the gyro `turn_deg` (deadband 3° +
+  0.01°/s of segment duration for bias drift). On curvy legs this alone takes
+  `ic2315_06` from 1875 m to 157 m median error.
+- **Stationary flicker is the main hazard, both ways.** `ic536_02` flickers
+  stop/move every 2–5 s while running at 25 m/s; `ic2035_00` flickers the same
+  way while standing at the platform. A single "trust stops ≥15 s" rule fixes
+  the first and breaks the second. What works: a short stop is believed when
+  the ±20 s window around it is ≥50 % stopped (0.35 while running vs 0.6 at the
+  platform). Stops are a penalty (3 m/m), never a hard constraint.
+- **Cell anchors must be capped.** One wrong eNodeB centroid 4 km off, linear in
+  distance, outweighed every turn (`ic4112_04` cost 140k, fit gave up on the
+  end constraint). Capped at 1 km of overshoot per anchor: 995 → 300 m.
+- **The schedule is still the strongest single prior — but only capped.**
+  The shape is blind to *when* the leg runs, and the stationary detector
+  sometimes misses the whole platform dwell (`ic3013_03`: a 235 s "moving"
+  straight). Adding the schedule trapezoid as a weak unary prior at every knot
+  (0.3 m/m) brought the median from 347 to 232 m — but uncapped it dragged
+  well-pinned turns on the one leg where the schedule was wrong (`ic2315_06`
+  157 → 2386 m). Capped at 1 km: 202 m median, 470 m mean over the good legs.
+- **Weights were swept, not tuned to death** (`work/sweep_*.log`): W_TURN 25→50
+  and W_SPEED 0.25→0.10 each helped; further changes (W_TURN 100, prior cap
+  500–2000, W_PRIOR 0.6) move the median by <10 m either way. Stopped there —
+  the scorer README's over-tuning warning applies.
+- **Route discovery gets the turn sequence for free**: hydrating the shape
+  onto each shortlisted candidate's path and adding `2 s × cost/segment` to the
+  GTFS timing cost separates opposite directions (`ic2809_03`, `ic4112_00` now
+  correct, 44 → 47/50). Per-*segment* normalisation matters: a flat per-metre
+  rate let long flickery legs swamp timing and flipped `ic2809_04`. `l1679_02`
+  stays wrong: it needs the shape weighted above the point where `ic2809_04`
+  breaks. Candidates with no OSM path are now sent to the bottom (we could
+  only stand still on them).
+- **Rejected**: feeding the shape's first/last `moving` segment straight into
+  the trapezoid window (`motion_window`) — 324 → 530 m median. Hydration
+  consumes the flags with context; the raw first flicker does not mean the
+  train rolled.
+- **Not done**: `sigma_m` (H5) is written but nothing weights by it yet; the
+  motion-lane dwell miss (`ic3013_03`) is best fixed at the source (M2), the
+  schedule prior is a patch over it.
 
 ## Data contracts
 
@@ -339,5 +390,7 @@ Status: both lanes are end-to-end and now run **jointly, per leg**
 (validated by `motion/validate_shape.py`, dev-only, reads labels) each write
 their contract file in the same pass, in place of the two separate runs this
 used to require. **Hydration (step 3) — the join of `shape.json` and
-`anchors.json` — is not started**; the joint runner produces both files
-together, it does not yet fuse them. Task breakdown + owners in `TASKS.md`.
+`anchors.json` — is built** (`absolute/hydrate.py`, section above) and runs
+inside `solve_warm`, so the joint runner now fuses both files per leg.
+Practice warm: 202 m median-of-medians, 47/50 routes, 42/50 station calls.
+Task breakdown + owners in `TASKS.md`.

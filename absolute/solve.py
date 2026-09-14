@@ -6,19 +6,22 @@ Nothing else from meta.json. Steps:
   1. GTFS: trips leaving the start station around t0 -> next call = destination, routeGuess.
   2. OSM: route from start station to destination -> polyline + length L.
   3. Motion profile: trapezoid (accelerate / cruise / brake) spanning the sensor window, area L.
+  3b. Hydration (absolute/hydrate.py): when the motion lane's work/<leg>/shape.json exists,
+      the shape's segment boundaries are fitted onto the path (turns, stops, anchors) and
+      that distance-along-time curve replaces the trapezoid. Written to work/<leg>/hydrated.json.
   4. Emit lat/lon every EMIT_S, one 500 m-out station call, routeGuess from row 0.
-The motion lane's shape.json replaces step 3 once hydration lands.
 """
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from . import anchors, gtfs, paths, submission, track
+from . import anchors, gtfs, hydrate, paths, submission, track
 from .stations import Station, load as load_stations
 
 EMIT_S = 5
@@ -65,21 +68,11 @@ def trapezoid_distance(t_s: np.ndarray, T: float, L: float, a: float = ACCEL_MPS
     return d
 
 
-def motion_window(leg_id: str, t0_ms: int, dep_ms: int | None, t_hi_ms: int) -> tuple[int, int]:
-    """[start rolling, stop rolling] in epoch ms. Prefers the motion lane's shape.json
-    (first `moving: true` segment) when it exists; otherwise the schedule-based prior."""
+def motion_window(t0_ms: int, dep_ms: int | None, t_hi_ms: int) -> tuple[int, int]:
+    """[start rolling, stop rolling] in epoch ms from the schedule prior (trapezoid fallback only;
+    the shape's own moving flags are consumed by hydrate.py — their first/last `moving` segment
+    is flicker-prone and made the trapezoid worse: 324 -> 530 m median when tried)."""
     t_move = max(t0_ms, (dep_ms or t0_ms) + int(DWELL_AFTER_SCHED_S * 1000))
-    shape = paths.WORK / leg_id / "shape.json"
-    if shape.exists():
-        try:
-            segs = json.loads(shape.read_text(encoding="utf-8")).get("segments", [])
-            moving = [s for s in segs if s.get("moving")]
-            if moving:
-                t_move = int(moving[0]["t_start"])
-                t_stop = int(moving[-1]["t_end"])
-                return t_move, min(t_stop, t_hi_ms)
-        except (ValueError, KeyError):
-            pass
     t_stop = t_hi_ms - int(TAIL_AFTER_ARRIVAL_S * 1000)
     if t_stop - t_move < 30_000:  # degenerate window: fall back to the raw span
         t_move, t_stop = t0_ms, t_hi_ms
@@ -88,6 +81,11 @@ def motion_window(leg_id: str, t0_ms: int, dep_ms: int | None, t_hi_ms: int) -> 
 
 ANCHOR_COST_PER_M = 0.2    # seconds of cost per metre (median) an anchor sits outside its radius from the path
 ANCHOR_RERANK_TOP = 6      # only re-rank the timing shortlist; a path per candidate costs a dijkstra
+SHAPE_COST_PER_M = 2.0     # seconds of cost per metre of hydration penalty *per shape segment*: the IMU
+                           # turn sequence fitted to each candidate path separates opposite directions
+                           # that timing cannot (fixes ic2809_03, ic4112_00; l1679_02 needs > 2.6 while
+                           # ic2809_04 breaks above 2.58 — a flat per-metre rate broke both).
+NO_PATH_COST_S = 1e6       # a destination we cannot route to on OSM is useless to us
 
 
 def anchor_misfit_m(path: track.Path, anchor_doc: dict, t_from_ms: int) -> float:
@@ -102,11 +100,18 @@ def anchor_misfit_m(path: track.Path, anchor_doc: dict, t_from_ms: int) -> float
     return float(np.median(miss)) if miss else 0.0  # median: one bad eNB centroid must not dominate
 
 
+def _prior_for(ws: WarmStart, hop: gtfs.Hop, t_hi_ms: int, L: float):
+    """Schedule-timed trapezoid as a distance(t) callable — hydration's weak timing prior."""
+    t_move, t_stop = motion_window(ws.t0_ms, hop.dep_ms, t_hi_ms)
+    Tm = (t_stop - t_move) / 1000.0
+    return lambda t: trapezoid_distance((np.asarray(t) - t_move) / 1000.0, Tm, L)
+
+
 def choose_hop(ws: WarmStart, observed_duration_s: float, leg_id: str | None = None,
                g: track.RailGraph | None = None) -> tuple[gtfs.Hop | None, list, dict[int, track.Path]]:
-    """Timing shortlist from GTFS, then re-rank the top few by cell-anchor consistency
-    with each candidate's OSM path — the timing model cannot tell opposite directions apart,
-    towers can. Returns (best, ranked, paths-by-trip_pk)."""
+    """Timing shortlist from GTFS, then re-rank the top few by (a) cell-anchor consistency and
+    (b) how well the IMU shape hydrates onto each candidate's OSM path — the timing model cannot
+    tell opposite directions apart; towers and the turn sequence can. Returns (best, ranked, paths)."""
     reg = load_stations()
     st = reg.by_name(ws.station_name) or reg.nearest(ws.lon, ws.lat)[0][0]
     ranked = gtfs.rank_hops(gtfs.hops_from(st, ws.t0_ms), ws.t0_ms, observed_duration_s)
@@ -114,19 +119,30 @@ def choose_hop(ws: WarmStart, observed_duration_s: float, leg_id: str | None = N
     if not ranked or leg_id is None or g is None:
         return (ranked[0][0] if ranked else None), ranked, paths
     doc = anchors.build(leg_id)
-    if not any(a["source"] == "cell" for a in doc["anchors"]):
+    has_cell = any(a["source"] == "cell" for a in doc["anchors"])
+    shape = None if os.environ.get("NO_HYDRATE") else hydrate.load_shape(leg_id)
+    if not has_cell and shape is None:
         return ranked[0][0], ranked, paths
     # anchors from the second half of the leg point at the destination, not the shared start
     t_half = ws.t0_ms + int(observed_duration_s * 500)
+    t_hi = ws.t0_ms + int(observed_duration_s * 1000)
     rescored = []
     for h, cost in ranked[:ANCHOR_RERANK_TOP]:
         key = (h.to.uic or h.to.name)
         pth = paths.get(key) or g.route(ws.lon, ws.lat, h.to.lon, h.to.lat)
         if pth is None:
-            rescored.append((h, cost + 600.0))
+            rescored.append((h, cost + NO_PATH_COST_S))
             continue
         paths[key] = pth
-        rescored.append((h, cost + ANCHOR_COST_PER_M * anchor_misfit_m(pth, doc, t_half)))
+        if has_cell:
+            cost += ANCHOR_COST_PER_M * anchor_misfit_m(pth, doc, t_half)
+        if shape is not None:
+            try:
+                hy = hydrate.hydrate(shape, doc, pth, _prior_for(ws, h, t_hi, pth.length_m))
+                cost += SHAPE_COST_PER_M * hy.cost / max(hy.n_segments, 1)
+            except ValueError:
+                pass
+        rescored.append((h, cost))
     rescored.sort(key=lambda x: x[1])
     ranked = rescored + ranked[ANCHOR_RERANK_TOP:]
     return ranked[0][0], ranked, paths
@@ -181,25 +197,45 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
 
     L = path.length_m
     info["path_len_m"] = round(L, 1)
-    t_move, t_stop = motion_window(leg_id, ws.t0_ms, hop.dep_ms, t_hi)
+    shape = None if os.environ.get("NO_HYDRATE") else hydrate.load_shape(leg_id)  # dev A/B switch
+    hyd = None
+    extra: dict = {}
+    t_move, t_stop = motion_window(ws.t0_ms, hop.dep_ms, t_hi)
     Tm = (t_stop - t_move) / 1000.0
-    info["window"] = f"+{(t_move - ws.t0_ms) / 1000:.0f}s .. +{(t_stop - ws.t0_ms) / 1000:.0f}s"
-    dist = trapezoid_distance((t_ms - t_move) / 1000.0, Tm, L)
+    if shape is not None:
+        try:
+            hyd = hydrate.hydrate(shape, anchor_doc, path, prior_distance_at=_prior_for(ws, hop, t_hi, L))
+        except ValueError as e:
+            _ev(gui, "H4", f"hydration failed ({e}) — trapezoid fallback", level="warn")
+    if hyd is not None:
+        dist = hyd.distance_at(t_ms)
+        call_t = hyd.time_at_distance(max(0.0, L - APPROACH_M))
+        call_ms = int(call_t) if call_t is not None else int(t_hi)
+        info["window"] = f"hydrated {hyd.n_segments} segs, {hyd.n_anchors} anchors, cost {hyd.cost:.0f}"
+        (paths.WORK / leg_id).mkdir(parents=True, exist_ok=True)
+        (paths.WORK / leg_id / "hydrated.json").write_text(
+            json.dumps({"leg_id": leg_id, "path_len_m": L, **hyd.to_json()}, indent=1), encoding="utf-8")
+        extra = {"knots": hyd.to_json()["knots"], "source": "hydration"}
+        _ev(gui, "H4", info["window"] + (f" — {'; '.join(hyd.notes)}" if hyd.notes else ""),
+            level="warn" if hyd.notes else "info", pct=0.7)
+    else:
+        info["window"] = f"+{(t_move - ws.t0_ms) / 1000:.0f}s .. +{(t_stop - ws.t0_ms) / 1000:.0f}s"
+        dist = trapezoid_distance((t_ms - t_move) / 1000.0, Tm, L)
+        # 500 m-out call: the instant the profile crosses L - 500
+        fine_t = np.arange(0, Tm, 0.5)
+        fine_d = trapezoid_distance(fine_t, Tm, L)
+        i = int(np.searchsorted(fine_d, max(0.0, L - APPROACH_M)))
+        call_ms = int(t_move + fine_t[min(i, len(fine_t) - 1)] * 1000)
+        extra = {"source": "trapezoid"}
     lonlat = path.at_distance(dist)
     submission.write_position(d, t_ms, lonlat[:, 0], lonlat[:, 1], hop.route_guess)
-
-    # 500 m-out call: the instant the profile crosses L - 500
-    fine_t = np.arange(0, Tm, 0.5)
-    fine_d = trapezoid_distance(fine_t, Tm, L)
-    i = int(np.searchsorted(fine_d, max(0.0, L - APPROACH_M)))
-    call_ms = int(t_move + fine_t[min(i, len(fine_t) - 1)] * 1000)
     submission.write_station_calls(d, [(call_ms, dest.name)])
-    _ev(gui, "N3", f"path {L:.0f} m, rolling {info['window']}", pct=0.8)
+    _ev(gui, "N3", f"path {L:.0f} m, {info['window']}", pct=0.8)
     _ev(gui, "T4", f"500 m-out call '{dest.name}' at +{(call_ms - ws.t0_ms) / 1000:.0f}s", pct=0.9)
     if gui is not None:
         gui.hydrated([{"t": int(t), "lat": float(ll[1]), "lon": float(ll[0]), "distance_m": float(dd)}
                       for t, ll, dd in zip(t_ms, lonlat, dist)],
-                     route_guess=hop.route_guess, destination=dest.name, path_len_m=L)
+                     route_guess=hop.route_guess, destination=dest.name, path_len_m=L, **extra)
         _mirror(gui, d)
     return info
 
