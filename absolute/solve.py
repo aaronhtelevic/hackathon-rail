@@ -42,9 +42,18 @@ class WarmStart:
     t0_ms: int
 
 
-def warm_from_meta(leg_id: str) -> WarmStart:
-    """Only the fields the warm track gives you. Dev convenience; scoring legs will hand these over."""
-    m = json.loads((paths.leg_dir(leg_id) / "meta.json").read_text(encoding="utf-8"))
+WARM_KEYS = ("stationFrom", "coordFrom", "tFromEpochMillis")
+
+
+def warm_from_meta(leg_id: str) -> WarmStart | None:
+    """Only the fields the warm track gives you (WARM_KEYS) — nothing else in meta.json is read.
+    None when the file or any of the three fields is missing (cold-only leg)."""
+    f = paths.leg_dir(leg_id) / "meta.json"
+    if not f.exists():
+        return None
+    m = json.loads(f.read_text(encoding="utf-8"))
+    if not all(k in m for k in WARM_KEYS):
+        return None
     return WarmStart(m["stationFrom"], m["coordFrom"][0], m["coordFrom"][1], int(m["tFromEpochMillis"]))
 
 
@@ -155,8 +164,10 @@ def _ev(gui, stage, msg, **kw):
 
 
 def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None,
-               gui=None) -> dict:
+               gui=None, sub_track: str = "warm") -> dict:
     """Batch solve: needs work/<leg>/shape.json to already exist to hydrate.
+    `sub_track` only picks the submission folder: the cold track calls this with a `ws`
+    inferred by absolute/cold.py instead of the given one.
     `gui` is an optional web/python/rail_gui.LegWriter: when given, anchors.json,
     hydrated.json, the CSVs and progress events are mirrored into its run directory.
 
@@ -164,6 +175,8 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
     but shape and anchors arrive as one leg-time stream and the hydrated
     points come out as a third."""
     ws = ws or warm_from_meta(leg_id)
+    if ws is None:
+        raise ValueError(f"{leg_id}: no warm-start fields in meta.json")
     t_lo, t_hi = sensor_span_ms(leg_id)
     T = (t_hi - ws.t0_ms) / 1000.0
     _ev(gui, "W1", f"warm start {ws.station_name} @ {ws.t0_ms}, sensor span {T:.0f}s", pct=0.05)
@@ -181,7 +194,7 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
         path = cand_paths.get(dest.uic or dest.name) or g.route(ws.lon, ws.lat, dest.lon, dest.lat)
         info["hop"] = f"{hop.route_guess} {hop.frm.name}->{dest.name} dep {hop.dep_ms} sched {hop.scheduled_duration_s:.0f}s"
 
-    d = submission.submission_dir(team, "warm", leg_id, out_root)
+    d = submission.submission_dir(team, sub_track, leg_id, out_root)
     t_ms = np.arange(ws.t0_ms, t_hi + 1, EMIT_S * 1000, dtype="int64")
 
     anchor_doc = anchors.build(leg_id, anchors.warm_start_anchor(ws.t0_ms, ws.lon, ws.lat))

@@ -351,6 +351,29 @@ Code: `absolute/hydrate.py`, called from `absolute/solve.py::solve_warm` and
   motion-lane dwell miss (`ic3013_03`) is best fixed at the source (M2), the
   schedule prior is a patch over it.
 
+## Cold track and the final round
+
+- **Cold = warm behind an inferred start** (`absolute/cold.py`). Start time is
+  the first sensor sample; start station candidates are the stations inside
+  (or nearest to) the radii of the cell towers seen in the first 60 s, each
+  hypothesis scored with the full warm route ranking. That last step is what
+  separates adjacent stations (Antwerpen-Centraal vs Berchem: towers cannot,
+  the ride's turn sequence can). 12/50 practice legs get a fix, 11 with the
+  right station; TTFF 5 s, first-fix error 87 m median.
+- **No fix → no cold folder.** 38 legs have no resolvable tower in the first
+  minute (24 have no cell at all, the rest are the West-Flanders zero-coverage
+  rides). Wifi has no reference data, so it cannot place us. A guess would
+  count as a "first fix" only if within 1 km, and would drag position accuracy
+  — so those legs are simply not entered on the cold track.
+- **Rejected**: using later towers (`ic536_00` first sees one at +219 s) to
+  back out the start — by then the candidate stations lie along the route,
+  not at its start, and the wrong start poisons the route pick.
+- **Final-round runner** `scripts/run_scoring.py`: shape → warm → cold per
+  leg, CSV validation, `<team>/<track>/<leg>/` layout, `run_report.csv`.
+  `RAIL_DATASET_DIR`/`--dataset` retargets the solvers; the scorer stays on
+  practice. Pre-flight (X2) done on a scratch copy of two legs holding only
+  `sensors.db` and the three warm fields.
+
 ## Data contracts
 
 Two engineers work in parallel, so the pipeline is cut at two files. These

@@ -318,27 +318,31 @@ hydrated curve crosses `L − 500`, nothing more.
 |----|------|-----|--------|-------|
 | W1 | Warm-start entry point: start station/coords/time → one `source: "warm_start"` anchor | A | DONE | `solve.py::WarmStart` — only station name, coords, t0. Written as the first anchor. |
 | W2 | Confirm route discovery narrows sharply given origin + departure time | A | DONE | 2–25 candidates per leg (median 4). Timing alone: 41/50. |
-| W3 | **Decide: warm only, or both tracks** | J | TODO | Biggest scope lever left — it decides whether F1–F3 get built at all. Decide before step 4 of the lane plan. |
+| W3 | **Decide: warm only, or both tracks** | J | DONE | **Both tracks.** Cold reuses the entire warm pipeline behind an inferred start (`absolute/cold.py`), so it cost ~1 h and cannot hurt the warm leaderboard. Legs with no usable cell get **no cold folder** — a wild fix scores worse than none. |
 
-### Cold start / first fix (metrics #4, #5) — gated on W3
+### Cold start / first fix (metrics #4, #5) — W3 decided: built
+
+Practice cold track (12 legs with a fix, 7 good-GT): position 178 m
+median-of-medians, TTFF 5 s, first-fix error 87 m, 9 routes, 11 station
+calls. `scripts/run_scoring.py --dataset … --out … [--score]` runs both tracks.
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| F1 | Fastest coarse fix from the first cell/WiFi samples alone | A | TODO | **Unavailable on 24/50 legs** — needs a wifi-only or shape-only path. |
-| F2 | Snap the coarse fix to the nearest plausible track segment (<1 km to count) | A | TODO | |
-| F3 | Tune emit-now vs wait: fast+wrong and slow+right both lose | A | TODO | |
+| F1 | Fastest coarse fix from the first cell/WiFi samples alone | A | DONE | `absolute/cold.py::station_candidates`: cell anchors from the first 60 s (radius ≤6 km), stations ranked by distance outside the towers' radii; t0 = first sensor sample. Fix on **12/50 practice legs** (the 26 with cell minus West-Flanders zero-coverage rides and `ic536_00`, whose first tower shows up at +219 s). First row is at t0 → TTFF 5 s median, first-fix error 87 m median. |
+| F2 | Snap the coarse fix to the nearest plausible track segment (<1 km to count) | A | DONE | The fix *is* a station (OSM/GTFS coords), so it is on the track by construction; the position curve then follows the hydrated OSM path. |
+| F3 | Tune emit-now vs wait: fast+wrong and slow+right both lose | A | DONE | Emit immediately. Adjacent-station ambiguity (Centraal/Berchem, Noord/Centraal) is resolved by scoring each start hypothesis with the full route ranking (`choose_hop`: timing + anchors + shape fit): start station right on **11/12**, routes 9/12 (the 2 misses are the same-minute GTFS pairs, as on warm). Miss: `ic536_01` picks Brussel-Noord for Centraal — underground, towers 1 km coarse. |
 
 ### Final round (16h00 → 17h00)
 
 | ID | Task | Own | Status | Notes |
 |----|------|-----|--------|-------|
-| X1 | Freeze the pipeline ~15h30; no algorithm changes after handover | J | TODO | |
-| X2 | Smoke-test on a practice leg with `meta.json`/`ground_truth.csv` **removed** | A | TODO | Highest-value pre-flight check — proves nothing leaks. |
-| X3 | Run on `datasets/scoring_release/` immediately at 16h00 | A | TODO | |
-| X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | TODO | |
-| X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | TODO | |
+| X1 | Freeze the pipeline ~15h30; no algorithm changes after handover | J | TODO | Freeze ~15h30. After that only `scripts/run_scoring.py` runs; no weight changes. |
+| X2 | Smoke-test on a practice leg with `meta.json`/`ground_truth.csv` **removed** | A | DONE | `scripts/run_scoring.py` run on a scratch copy of two legs holding only `sensors.db` + a `meta.json` with just `stationFrom/coordFrom/tFromEpochMillis`: warm 2/2, cold 1/2 (the other has no cell), CSVs valid. Static check: no `ground_truth|routeLengthM|lineName|stationTo|polylines` reference in `absolute/`, `motion/`, or the runners (only a docstring). `paths.RAIL_DATASET_DIR` points the solvers at any leg folder; the scorer keeps reading practice. |
+| X3 | Run on `datasets/scoring_release/` immediately at 16h00 | A | READY | `RAIL_DATASET_DIR` not needed — `.venv/bin/python scripts/run_scoring.py --dataset datasets/scoring_release --out work/final` (runs the shape generator per leg first; ~5 s/leg). Practice dry run reproduces 202 m / 47 / 42 warm and 178 m, TTFF 5 s cold. |
+| X4 | Validate every output CSV (columns, row counts, no NaNs, monotonic time) | A | DONE | `run_scoring.py::validate`: columns, ≥2 rows, no NaN, monotonic time, lat/lon inside Belgium, routeGuess non-empty, ≤1 station call. A failing folder is deleted, never shipped; `run_report.csv` lists every leg's outcome. |
+| X5 | Package `<team_name>/<cold\|warm>/<leg_id>/…`, send over Teams before 17h00 | A | READY | Output already in `<out>/<team>/<cold|warm>/<leg_id>/` — zip `work/final/televic` and send over Teams. Team name defaults to `televic` (`--team`). |
 | X6 | Verify graceful degradation on a **cell-less** leg | M | DONE | All 24 cell-less legs solve and score through the absolute path (empty anchors, schedule-only timing). |
-| X7 | **Ask Steven: will scoring legs come with polylines?** | A | TODO | If yes, submit `latitude,longitude` and let the scorer project — N2/N3 route-picking becomes optional. Ask early; it changes the plan. |
+| X7 | **Ask Steven: will scoring legs come with polylines?** | A | OPEN | **Still to ask Steven** (also: does the scoring release's `meta.json` carry the warm fields under the same names, and are the leg folder names label-free?). Moot for our output either way — we submit lat/lon, and the organizers need polylines to score at all. |
 
 ---
 
