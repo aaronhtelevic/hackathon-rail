@@ -498,6 +498,39 @@ async function handleApi (req, res, url) {
     return sendJson(res, 200, { job: publicJob(job) })
   }
 
+  // GET /api/scores  — every leg's score.json across every run, for the summary tab
+  if (seg.length === 2 && seg[1] === 'scores' && req.method === 'GET') {
+    const runIds = await listDirs(RUNS_DIR)
+    const rows = []
+    for (const runId of runIds) {
+      const runDir = safeRunPath(runId)
+      const meta = await readJsonIfExists(path.join(runDir, 'run.json'))
+      const legIds = await listDirs(runDir)
+      for (const legId of legIds) {
+        const legDir = path.join(runDir, legId)
+        const score = await readJsonIfExists(path.join(legDir, 'score.json'))
+        if (!score) continue
+        rows.push({ run_id: runId, leg_id: legId, algorithm: meta?.algorithm ?? null, track: meta?.track ?? null, score })
+      }
+    }
+    return sendJson(res, 200, { rows })
+  }
+
+  // DELETE /api/runs  — wipe every run directory (the launcher must be idle)
+  if (seg.length === 2 && seg[1] === 'runs' && req.method === 'DELETE') {
+    for (const j of jobs.values()) {
+      if (j.state === 'running') throw new LaunchError(409, `cannot clear runs while ${j.run_id} is running`)
+    }
+    const runIds = await listDirs(RUNS_DIR)
+    for (const runId of runIds) {
+      const dir = safeRunPath(runId)
+      if (dir) await fsp.rm(dir, { recursive: true, force: true })
+    }
+    jobs.clear()
+    announceJobs()
+    return sendJson(res, 200, { cleared: runIds.length })
+  }
+
   // GET /api/runs
   if (seg.length === 2 && seg[1] === 'runs') {
     const runIds = await listDirs(RUNS_DIR)
@@ -587,15 +620,18 @@ async function serveStatic (req, res, url) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
   res.setHeader('access-control-allow-origin', '*')
-  res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
+  res.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
   res.setHeader('access-control-allow-headers', 'content-type')
   if (req.method === 'OPTIONS') { res.writeHead(204); return res.end() }
-  // Run data is read-only; POST exists only for the launcher (/api/jobs).
-  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') {
+  // Run data is read-only otherwise; POST is for the launcher (/api/jobs), DELETE for wiping runs.
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST' && req.method !== 'DELETE') {
     return sendJson(res, 405, { error: 'method not allowed' })
   }
   if (req.method === 'POST' && !url.pathname.startsWith('/api/jobs')) {
     return sendJson(res, 405, { error: 'read-only except /api/jobs' })
+  }
+  if (req.method === 'DELETE' && url.pathname !== '/api/runs') {
+    return sendJson(res, 405, { error: 'delete only supported on /api/runs' })
   }
   const done = url.pathname.startsWith('/api/')
     ? handleApi(req, res, url)

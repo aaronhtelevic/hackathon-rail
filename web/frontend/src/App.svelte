@@ -1,10 +1,11 @@
 <script>
-  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, listJobs, watchChanges } from './lib/api.js'
+  import { getConfig, listRuns, getRun, getLeg, getEvents, fileUrl, listJobs, watchChanges, clearRuns } from './lib/api.js'
   import RunLauncher from './lib/RunLauncher.svelte'
   import LaneTimeline from './lib/LaneTimeline.svelte'
   import AnchorMap from './lib/AnchorMap.svelte'
   import EventLog from './lib/EventLog.svelte'
   import ScorePanel from './lib/ScorePanel.svelte'
+  import ScoreSummary from './lib/ScoreSummary.svelte'
   import JsonBox from './lib/JsonBox.svelte'
 
   let config = $state(null)
@@ -19,6 +20,20 @@
   let autoSelect = $state(true)     // follow the newest run
   let jobs = $state([])             // lane runners started from the GUI
   let error = $state(null)
+  let sidebarOpen = $state(true)
+  let tab = $state('detail')        // 'detail' | 'scores'
+  let clearing = $state(false)
+
+  async function onClearRuns () {
+    if (!confirm('Delete every run under the runs dir? This cannot be undone.')) return
+    clearing = true
+    try {
+      await clearRuns()
+      run = null; leg = null; selectedRun = null; selectedLeg = null; events = []; cursor = 0
+      await refreshRuns()
+      error = null
+    } catch (e) { error = String(e.message ?? e) } finally { clearing = false }
+  }
 
   const LANE_OF = { motion: 'motion', absolute: 'absolute', joint: 'joint' }
 
@@ -123,49 +138,66 @@
 </script>
 
 <header>
+  <button class="sidebar-toggle" aria-pressed={sidebarOpen} onclick={() => (sidebarOpen = !sidebarOpen)} title="toggle sidebar">
+    {sidebarOpen ? '⟨' : '⟩'}
+  </button>
   <h1>Rail run viewer</h1>
   <span class="pill {connState === 'live' ? 'running' : ''}">{connState}</span>
   <button aria-pressed={autoSelect} onclick={() => (autoSelect = !autoSelect)}>follow newest run</button>
+  <div class="tabs">
+    <button aria-pressed={tab === 'detail'} onclick={() => (tab = 'detail')}>run detail</button>
+    <button aria-pressed={tab === 'scores'} onclick={() => (tab = 'scores')}>all scores</button>
+  </div>
+  <button class="danger" disabled={clearing} onclick={onClearRuns}>{clearing ? 'clearing…' : 'clear all output'}</button>
   <span class="dim mono path">{config?.runsDir ?? ''}</span>
 </header>
 
 {#if error}<div class="banner">{error}</div>{/if}
 
-<main>
-  <aside class="scroll">
-    <RunLauncher {jobs} onstarted={onStarted} />
+<main class:no-sidebar={!sidebarOpen}>
+  {#if sidebarOpen}
+    <aside class="scroll">
+      <RunLauncher {jobs} onstarted={onStarted} />
 
-    <div class="panel picker">
-      <h2>Runs</h2>
-      {#each runs as r (r.run_id)}
-        <button class="item" aria-pressed={r.run_id === selectedRun} onclick={() => selectRun(r.run_id)}>
-          <span class="name mono">{r.run_id}</span>
-          <span class="meta dim">{r.meta?.algorithm ?? '—'} · {r.nLegs} legs · {ago(r.mtimeMs)}</span>
-        </button>
-      {:else}
-        <p class="dim">No runs yet. Write one into the runs dir — see web/README.md.</p>
-      {/each}
-
-      {#if run}
-        <h2 class="legs-h">Legs</h2>
-        {#each run.legs as l (l.leg_id)}
-          <button class="item" aria-pressed={l.leg_id === selectedLeg} onclick={() => selectLeg(l.leg_id)}>
-            <span class="name mono">{l.leg_id}</span>
-            <span class="meta">
-              <span class="pill {legStatus(l)}">{legStatus(l)}</span>
-              {#if lane(l)}<span class="pill {lane(l)}">{lane(l)}</span>{/if}
-              {#if l.status?.pct != null}<span class="dim">{Math.round(l.status.pct * 100)}%</span>{/if}
-            </span>
+      <div class="panel picker">
+        <h2>Runs</h2>
+        {#each runs as r (r.run_id)}
+          <button class="item" aria-pressed={r.run_id === selectedRun} onclick={() => selectRun(r.run_id)}>
+            <span class="name mono">{r.run_id}</span>
+            <span class="meta dim">{r.meta?.algorithm ?? '—'} · {r.nLegs} legs · {ago(r.mtimeMs)}</span>
           </button>
+        {:else}
+          <p class="dim">No runs yet. Write one into the runs dir — see web/README.md.</p>
         {/each}
-      {/if}
-    </div>
-  </aside>
 
-  <section class="detail scroll">
-    {#if !selectedLeg}
+        {#if run}
+          <h2 class="legs-h">Legs</h2>
+          {#each run.legs as l (l.leg_id)}
+            <button class="item" aria-pressed={l.leg_id === selectedLeg} onclick={() => selectLeg(l.leg_id)}>
+              <span class="name mono">{l.leg_id}</span>
+              <span class="meta">
+                <span class="pill {legStatus(l)}">{legStatus(l)}</span>
+                {#if lane(l)}<span class="pill {lane(l)}">{lane(l)}</span>{/if}
+                {#if l.status?.pct != null}<span class="dim">{Math.round(l.status.pct * 100)}%</span>{/if}
+              </span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </aside>
+  {/if}
+
+  {#if tab === 'scores'}
+    <section class="detail scroll">
+      <ScoreSummary visible={tab === 'scores'} />
+    </section>
+  {:else if !selectedLeg}
+    <section class="detail scroll">
       <div class="panel snap-section"><p class="dim">Pick a leg.</p></div>
-    {:else}
+    </section>
+  {:else}
+    <section class="detail scroll">
+
       <div class="panel snap-section">
         <h2>{selectedLeg} — {run?.meta?.algorithm ?? 'algorithm'}</h2>
         <p class="dim status-line">
@@ -206,8 +238,8 @@
         <JsonBox label="hydrated.json" value={leg?.hydrated} />
         <JsonBox label="status.json" value={leg?.status} />
       </div>
-    {/if}
-  </section>
+    </section>
+  {/if}
 </main>
 
 <style>
@@ -217,11 +249,16 @@
     position: sticky; top: 0; z-index: 2;
   }
   header h1 { font-size: 14px; }
+  .sidebar-toggle { font-size: 12px; padding: 3px 8px; }
+  .tabs { display: flex; gap: 4px; }
+  .tabs button { font-size: 12px; }
+  .danger:hover { border-color: var(--bad); color: var(--bad); }
   .path { margin-left: auto; font-size: 11px; }
   .banner { background: #3a1e22; border-bottom: 1px solid var(--bad); color: var(--bad); padding: 6px 14px; font-size: 12px; }
 
   main { display: grid; grid-template-columns: 300px 1fr; gap: 12px; padding: 12px; height: calc(100vh - 46px); }
-  aside { display: flex; flex-direction: column; gap: 12px; }
+  main.no-sidebar { grid-template-columns: 1fr; }
+  aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .picker { display: flex; flex-direction: column; gap: 4px; }
   .legs-h { margin-top: 14px; }
   .item {

@@ -33,6 +33,10 @@ export const listJobs = () => getJson('/api/jobs')
 export const startRun = opts => postJson('/api/jobs', opts)
 export const cancelRun = jobId => postJson(`/api/jobs/${encodeURIComponent(jobId)}/cancel`)
 
+// --- scoring summary + housekeeping ------------------------------------------
+export const listScores = () => getJson('/api/scores')
+export const clearRuns = () => request('/api/runs', { method: 'DELETE' })
+
 // Reference OSM layers (belgium_rail_network / belgium_rail_stations) — static, cache-friendly.
 export const getOsmLayer = layer => getJson(`/api/osm/${encodeURIComponent(layer)}`)
 
