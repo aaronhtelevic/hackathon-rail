@@ -132,13 +132,24 @@ def choose_hop(ws: WarmStart, observed_duration_s: float, leg_id: str | None = N
     return ranked[0][0], ranked, paths
 
 
-def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None) -> dict:
+def _ev(gui, stage, msg, **kw):
+    if gui is not None:
+        gui.event(stage, msg, **kw)
+
+
+def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Path | None = None,
+               gui=None) -> dict:
+    """`gui` is an optional web/python/rail_gui.LegWriter: when given, anchors.json,
+    hydrated.json, the CSVs and progress events are mirrored into its run directory."""
     ws = ws or warm_from_meta(leg_id)
     t_lo, t_hi = sensor_span_ms(leg_id)
     T = (t_hi - ws.t0_ms) / 1000.0
+    _ev(gui, "W1", f"warm start {ws.station_name} @ {ws.t0_ms}, sensor span {T:.0f}s", pct=0.05)
     g = track.load()
     hop, ranked, cand_paths = choose_hop(ws, T, leg_id, g)
     info = {"leg": leg_id, "hop": None, "path_len_m": None, "n_candidates": len(ranked)}
+    _ev(gui, "R3", f"{len(ranked)} GTFS candidates; top: "
+        + ", ".join(f"{h.route_guess}->{h.to.name} ({c:.0f})" for h, c in ranked[:3]), pct=0.3)
 
     if hop is None:
         dest: Station | None = None
@@ -151,11 +162,21 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
     d = submission.submission_dir(team, "warm", leg_id, out_root)
     t_ms = np.arange(ws.t0_ms, t_hi + 1, EMIT_S * 1000, dtype="int64")
 
+    anchor_doc = anchors.build(leg_id, anchors.warm_start_anchor(ws.t0_ms, ws.lon, ws.lat))
+    anchors.write(leg_id, anchors.warm_start_anchor(ws.t0_ms, ws.lon, ws.lat), paths.WORK / leg_id)
+    n_cell = sum(a["source"] == "cell" for a in anchor_doc["anchors"])
+    _ev(gui, "H1", f"{n_cell} cell anchors" if n_cell else "no cell anchors — H7 path",
+        level="info" if n_cell else "warn", pct=0.5)
+    if gui is not None:
+        gui.anchors(anchor_doc)
+
     if path is None:
         # no route: stand still at the start — still a valid, scoreable file
+        _ev(gui, "N3", "no GTFS hop or no OSM path — standing still at start", level="warn")
         lon = np.full(len(t_ms), ws.lon); lat = np.full(len(t_ms), ws.lat)
         submission.write_position(d, t_ms, lon, lat, hop.route_guess if hop else None)
         submission.write_station_calls(d, [])
+        _mirror(gui, d)
         return info
 
     L = path.length_m
@@ -173,6 +194,20 @@ def solve_warm(leg_id: str, team: str, ws: WarmStart | None = None, out_root: Pa
     i = int(np.searchsorted(fine_d, max(0.0, L - APPROACH_M)))
     call_ms = int(t_move + fine_t[min(i, len(fine_t) - 1)] * 1000)
     submission.write_station_calls(d, [(call_ms, dest.name)])
-
-    anchors.write(leg_id, anchors.warm_start_anchor(ws.t0_ms, ws.lon, ws.lat), paths.WORK / leg_id)
+    _ev(gui, "N3", f"path {L:.0f} m, rolling {info['window']}", pct=0.8)
+    _ev(gui, "T4", f"500 m-out call '{dest.name}' at +{(call_ms - ws.t0_ms) / 1000:.0f}s", pct=0.9)
+    if gui is not None:
+        gui.hydrated([{"t": int(t), "lat": float(ll[1]), "lon": float(ll[0]), "distance_m": float(dd)}
+                      for t, ll, dd in zip(t_ms, lonlat, dist)],
+                     route_guess=hop.route_guess, destination=dest.name, path_len_m=L)
+        _mirror(gui, d)
     return info
+
+
+def _mirror(gui, sub_dir: Path) -> None:
+    if gui is None:
+        return
+    for name in ("position.csv", "station_calls.csv"):
+        f = sub_dir / name
+        if f.exists():
+            gui.write_text(name, f.read_text(encoding="utf-8"))
