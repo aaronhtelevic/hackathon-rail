@@ -103,7 +103,8 @@ def _points(hy: hydrate.Hydrated, path: track.Path, t0_ms: int, t_end_ms: int) -
 
 
 def solve_leg(leg_id: str, team: str, ws: solve.WarmStart | None = None,
-              out_root: Path | None = None, gui=None, cfg: StreamConfig | None = None) -> dict:
+              out_root: Path | None = None, gui=None, cfg: StreamConfig | None = None,
+              sub_track: str = "warm") -> dict:
     """Stream one leg, then hand the completed contracts to the batch solver
     for the actual submission. Returns solve_warm()'s info dict."""
     cfg = cfg or StreamConfig()
@@ -156,7 +157,7 @@ def solve_leg(leg_id: str, team: str, ws: solve.WarmStart | None = None,
     _write_contracts(leg_id, shape, warm, gui)
     _ev(gui, "M3", f"stream done: {len(shape['segments'])} segments, {len(live) - 1} cell anchors, "
         f"{n_refits} live refits", pct=0.75)
-    return solve.solve_warm(leg_id, team, ws, out_root, gui=gui)
+    return solve.solve_warm(leg_id, team, ws, out_root, gui=gui, sub_track=sub_track)
 
 
 def _refit(leg_id, ws, tk, live, cands, best, gui, cfg, t_now, t_hi):

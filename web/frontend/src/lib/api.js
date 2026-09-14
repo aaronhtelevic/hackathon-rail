@@ -29,7 +29,7 @@ export const fileUrl = (runId, legId, name) =>
 // --- launcher ---------------------------------------------------------------
 export const listLegs = () => getJson('/api/legs')
 export const listJobs = () => getJson('/api/jobs')
-/** opts: {lane, legs[], allLegs, notes} */
+/** opts: {lane, legs[], allLegs, notes, demoSpeed, cold} */
 export const startRun = opts => postJson('/api/jobs', opts)
 export const cancelRun = jobId => postJson(`/api/jobs/${encodeURIComponent(jobId)}/cancel`)
 

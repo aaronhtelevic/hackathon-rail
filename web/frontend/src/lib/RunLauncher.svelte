@@ -30,6 +30,11 @@
   ]
   let demoSpeed = $state(30)
 
+  // Cold track: the runner ignores meta.json's start station/time and infers
+  // them from the first minute of cell towers (absolute/cold.py). Legs with no
+  // usable towers are skipped by the runner.
+  let cold = $state(false)
+
   const running = $derived(jobs.find(j => j.state === 'running'))
   const laneRunning = $derived(jobs.find(j => j.state === 'running' && j.lane === lane))
   const shown = $derived(
@@ -71,6 +76,7 @@
         allLegs,
         notes: notes.trim() || undefined,
         demoSpeed: demoSpeed || undefined,
+        cold,
       })
       onstarted(job)
     } catch (e) { error = String(e.message ?? e) } finally { busy = false }
@@ -101,6 +107,7 @@
       <span class="dim">{secs(running)}s</span>
       <button onclick={() => cancel(running.job_id)}>stop</button>
       {#if running.demoSpeed}<span class="pill demo">{running.demoSpeed}x</span>{/if}
+      {#if running.cold}<span class="pill demo">cold</span>{/if}
       {#if lastLine(running)}<span class="dim tail mono">{lastLine(running)}</span>{/if}
     </div>
   {/if}
@@ -127,6 +134,16 @@
       {/each}
     </div>
 
+    <div class="row">
+      <label class="cold" class:on={cold}>
+        <input type="checkbox" bind:checked={cold} />
+        <span>cold start</span>
+      </label>
+      <span class="dim hint">
+        {cold ? 'start station + time inferred from cell towers' : 'start station + time from meta.json'}
+      </span>
+    </div>
+
     <div class="row speeds">
       <span class="dim">demo speed</span>
       {#each DEMO_SPEEDS as s (s.v)}
@@ -144,7 +161,7 @@
     <div class="row actions">
       <span class="dim">{selected.size}/{legs.length} legs</span>
       <button class="go" disabled={busy || !selected.size || Boolean(laneRunning)} onclick={start}>
-        {laneRunning ? 'joint run busy' : busy ? 'starting…' : 'run joint'}
+        {laneRunning ? 'joint run busy' : busy ? 'starting…' : cold ? 'run cold' : 'run joint'}
       </button>
     </div>
   {/if}
@@ -177,6 +194,10 @@
   .speed { padding: 2px 7px; font-size: 11px; }
   .speed[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   .pill.demo { color: var(--accent); border-color: var(--accent); }
+
+  .cold { display: flex; align-items: center; gap: 5px; font-size: 11px; cursor: pointer; }
+  .cold.on { color: var(--accent); }
+  .hint { font-size: 10px; }
 
   input {
     font: inherit; color: inherit; background: var(--panel-2);

@@ -112,6 +112,7 @@ const publicJob = j => ({
   allLegs: j.allLegs,
   notes: j.notes,
   demoSpeed: j.demoSpeed,
+  cold: j.cold,
   cmd: j.cmd,
   state: j.state,
   startedAt: j.startedAt,
@@ -147,7 +148,7 @@ class LaunchError extends Error {
 }
 
 /** Spawn one lane runner. */
-async function startJob ({ lane, legs, allLegs, notes, demoSpeed }) {
+async function startJob ({ lane, legs, allLegs, notes, demoSpeed, cold }) {
   if (!LAUNCH_ENABLED) throw new LaunchError(403, 'launching is disabled (RAIL_GUI_LAUNCH=0)')
   const spec = LANES[lane]
   if (!spec) throw new LaunchError(400, `unknown lane ${JSON.stringify(lane)}`)
@@ -178,6 +179,7 @@ async function startJob ({ lane, legs, allLegs, notes, demoSpeed }) {
   const runId = `${stamp()}-${lane}`
   const args = [spec.script, '--run-id', runId, ...(spec.extraArgs ?? []),
                 ...spec.legArgs(picked, allLegs)]
+  if (cold) args.push('--cold')
   if (notes) args.push('--notes', String(notes).slice(0, 300))
   if (validSpeed) args.push('--demo-speed', String(validSpeed))
 
@@ -189,6 +191,7 @@ async function startJob ({ lane, legs, allLegs, notes, demoSpeed }) {
     allLegs: Boolean(allLegs),
     notes: notes || null,
     demoSpeed: validSpeed || null,
+    cold: Boolean(cold),
     cmd: [python, ...args].join(' '),
     state: 'running',
     startedAt: Date.now(),
@@ -474,7 +477,7 @@ async function handleApi (req, res, url) {
     return sendJson(res, 200, { enabled: LAUNCH_ENABLED, jobs: jobList() })
   }
 
-  // POST /api/jobs  {lane, legs[], allLegs, notes}  — start a run
+  // POST /api/jobs  {lane, legs[], allLegs, notes, cold}  — start a run
   if (seg.length === 2 && seg[1] === 'jobs' && req.method === 'POST') {
     const body = await readJsonBody(req)
     const job = await startJob({
@@ -483,6 +486,7 @@ async function handleApi (req, res, url) {
       allLegs: Boolean(body.allLegs),
       notes: body.notes,
       demoSpeed: body.demoSpeed,
+      cold: Boolean(body.cold),
     })
     return sendJson(res, 201, { job: publicJob(job) })
   }
